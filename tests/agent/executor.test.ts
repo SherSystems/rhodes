@@ -40,6 +40,7 @@ function makeMockGovernance(
     tripped?: boolean;
     needsApproval?: boolean;
     approved?: boolean;
+    approvalWaitMs?: number;
   },
 ): GovernanceEngineRef {
   const {
@@ -47,6 +48,7 @@ function makeMockGovernance(
     tripped = false,
     needsApproval = false,
     approved = true,
+    approvalWaitMs = 0,
   } = overrides ?? {};
   return {
     evaluate: vi.fn().mockResolvedValue({
@@ -57,6 +59,7 @@ function makeMockGovernance(
       approval: needsApproval
         ? { request_id: "req-1", approved }
         : undefined,
+      approval_wait_ms: needsApproval ? approvalWaitMs : undefined,
     }),
     logAction: vi.fn(),
     circuitBreaker: {
@@ -204,7 +207,7 @@ describe("Executor", () => {
   });
 
   it("emits approval_requested and step_failed when approval not granted", async () => {
-    governance = makeMockGovernance({ needsApproval: true, approved: false });
+    governance = makeMockGovernance({ needsApproval: true, approved: false, approvalWaitMs: 2300 });
     eventBus = new EventBus();
     vi.spyOn(eventBus, "emit");
     executor = new Executor(toolRegistry, governance, eventBus);
@@ -215,7 +218,13 @@ describe("Executor", () => {
     const emitCalls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
     const types = emitCalls.map((c) => c[0].type);
     expect(types).toContain("approval_requested");
+    expect(types).toContain("approval_received");
     expect(types).toContain("step_failed");
+
+    const approvalReceived = emitCalls
+      .map((c) => c[0])
+      .find((e) => e.type === "approval_received");
+    expect(approvalReceived?.data.wait_ms).toBe(2300);
   });
 
   // ── Tool returns failure ────────────────────────────────
@@ -334,5 +343,19 @@ describe("Executor", () => {
 
     const auditEntry = (governance.logAction as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(auditEntry.plan_id).toBeUndefined();
+  });
+
+  it("propagates run_id to emitted step events when provided", async () => {
+    const step = makeStep();
+    await executor.executeStep(step, "build", "plan_42", "run_abc");
+
+    const emitCalls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const started = emitCalls.map((c) => c[0]).find((e) => e.type === "step_started");
+    const completed = emitCalls.map((c) => c[0]).find((e) => e.type === "step_completed");
+
+    expect(started?.data.run_id).toBe("run_abc");
+    expect(started?.data.plan_id).toBe("plan_42");
+    expect(completed?.data.run_id).toBe("run_abc");
+    expect(completed?.data.plan_id).toBe("plan_42");
   });
 });

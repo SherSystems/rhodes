@@ -29,6 +29,7 @@ export interface GovernanceEngineRef {
     needs_approval: boolean;
     reason: string;
     approval?: { request_id: string; approved: boolean };
+    approval_wait_ms?: number;
   }>;
   logAction(entry: AuditEntry): void;
   circuitBreaker: {
@@ -62,7 +63,12 @@ export class Executor {
    * Execute a single plan step with full governance checks,
    * state capture, event emission, and audit logging.
    */
-  async executeStep(step: PlanStep, mode: AgentMode, planId?: string): Promise<StepResult> {
+  async executeStep(
+    step: PlanStep,
+    mode: AgentMode,
+    planId?: string,
+    runId?: string,
+  ): Promise<StepResult> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
 
@@ -70,7 +76,13 @@ export class Executor {
     this.eventBus.emit({
       type: AgentEventType.StepStarted,
       timestamp,
-      data: { step_id: step.id, action: step.action, description: step.description },
+      data: {
+        step_id: step.id,
+        action: step.action,
+        description: step.description,
+        plan_id: planId,
+        run_id: runId,
+      },
     });
 
     // Check circuit breaker
@@ -79,7 +91,7 @@ export class Executor {
         startTime,
         "Circuit breaker is tripped — too many consecutive failures",
       );
-      this.emitStepFailed(step, result);
+      this.emitStepFailed(step, result, planId, runId);
       this.logAudit(step, mode, "blocked", result, planId, "Circuit breaker tripped");
       return result;
     }
@@ -98,7 +110,7 @@ export class Executor {
         startTime,
         `Governance evaluation failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-      this.emitStepFailed(step, result);
+      this.emitStepFailed(step, result, planId, runId);
       return result;
     }
 
@@ -108,29 +120,48 @@ export class Executor {
         startTime,
         `Blocked by governance: ${evaluation.reason}`,
       );
-      this.emitStepFailed(step, result);
+      this.emitStepFailed(step, result, planId, runId);
       this.logAudit(step, mode, "blocked", result, planId, evaluation.reason);
       return result;
     }
 
-    // If needs approval, check if it was granted
+    // If approval flow was involved, emit request/response events so telemetry can
+    // capture wait durations and approval outcomes.
     if (evaluation.needs_approval) {
+      this.eventBus.emit({
+        type: AgentEventType.ApprovalRequested,
+        timestamp: new Date().toISOString(),
+        data: {
+          step_id: step.id,
+          action: step.action,
+          tier: evaluation.tier,
+          request_id: evaluation.approval?.request_id,
+          plan_id: planId,
+          run_id: runId,
+        },
+      });
+
+      this.eventBus.emit({
+        type: AgentEventType.ApprovalReceived,
+        timestamp: new Date().toISOString(),
+        data: {
+          step_id: step.id,
+          action: step.action,
+          tier: evaluation.tier,
+          request_id: evaluation.approval?.request_id,
+          approved: evaluation.approval?.approved === true,
+          wait_ms: evaluation.approval_wait_ms ?? 0,
+          plan_id: planId,
+          run_id: runId,
+        },
+      });
+
       if (!evaluation.approval || !evaluation.approval.approved) {
         const result = this.buildFailedResult(
           startTime,
           "Approval required but not granted",
         );
-        this.eventBus.emit({
-          type: AgentEventType.ApprovalRequested,
-          timestamp: new Date().toISOString(),
-          data: {
-            step_id: step.id,
-            action: step.action,
-            tier: evaluation.tier,
-            request_id: evaluation.approval?.request_id,
-          },
-        });
-        this.emitStepFailed(step, result);
+        this.emitStepFailed(step, result, planId, runId);
         this.logAudit(step, mode, "blocked", result, planId, "Approval not granted");
         return result;
       }
@@ -160,7 +191,7 @@ export class Executor {
         stateBefore,
       );
       this.governance.circuitBreaker.track(false);
-      this.emitStepFailed(step, result);
+      this.emitStepFailed(step, result, planId, runId);
       this.logAudit(step, mode, "failed", result, planId);
       return result;
     }
@@ -189,7 +220,7 @@ export class Executor {
       };
 
       this.governance.circuitBreaker.track(true);
-      this.emitStepCompleted(step, result);
+      this.emitStepCompleted(step, result, planId, runId);
       this.logAudit(step, mode, "success", result, planId);
       return result;
     } else {
@@ -204,7 +235,7 @@ export class Executor {
       };
 
       this.governance.circuitBreaker.track(false);
-      this.emitStepFailed(step, result);
+      this.emitStepFailed(step, result, planId, runId);
       this.logAudit(step, mode, "failed", result, planId);
       return result;
     }
@@ -226,7 +257,12 @@ export class Executor {
     };
   }
 
-  private emitStepCompleted(step: PlanStep, result: StepResult): void {
+  private emitStepCompleted(
+    step: PlanStep,
+    result: StepResult,
+    planId?: string,
+    runId?: string,
+  ): void {
     this.eventBus.emit({
       type: AgentEventType.StepCompleted,
       timestamp: new Date().toISOString(),
@@ -235,11 +271,18 @@ export class Executor {
         action: step.action,
         duration_ms: result.duration_ms,
         output: result.data,
+        plan_id: planId,
+        run_id: runId,
       },
     });
   }
 
-  private emitStepFailed(step: PlanStep, result: StepResult): void {
+  private emitStepFailed(
+    step: PlanStep,
+    result: StepResult,
+    planId?: string,
+    runId?: string,
+  ): void {
     this.eventBus.emit({
       type: AgentEventType.StepFailed,
       timestamp: new Date().toISOString(),
@@ -248,6 +291,8 @@ export class Executor {
         action: step.action,
         error: result.error,
         duration_ms: result.duration_ms,
+        plan_id: planId,
+        run_id: runId,
       },
     });
   }

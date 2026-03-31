@@ -1,20 +1,22 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import { fetchAudit, fetchAuditStats } from "../api/client";
+import { fetchAudit, fetchAuditStats, fetchRunTelemetry } from "../api/client";
 import { formatDuration } from "../hooks/useFormatters";
-import type { AuditEntry } from "../types";
+import type { AuditEntry, RunTelemetrySummary } from "../types";
 
 export default function Governance() {
   const { totalActions, failures, replans, startTime } = useStore();
 
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [auditStats, setAuditStats] = useState<Record<string, unknown>>({});
+  const [runTelemetry, setRunTelemetry] = useState<RunTelemetrySummary | null>(null);
   const [expandedPlans, setExpandedPlans] = useState<Record<string, boolean>>({});
   const [expandedEntries, setExpandedEntries] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     fetchAudit().then(setAuditEntries).catch(() => {});
     fetchAuditStats().then(setAuditStats).catch(() => {});
+    fetchRunTelemetry(7).then(setRunTelemetry).catch(() => {});
   }, []);
 
   const togglePlan = (planId: string) =>
@@ -61,6 +63,9 @@ export default function Governance() {
         return "";
     }
   };
+
+  const formatMs = (value: number | null): string =>
+    value === null ? "-" : formatDuration(value);
 
   // Group entries by plan_id
   const grouped: { planId: string | null; entries: { entry: AuditEntry; index: number }[] }[] = [];
@@ -123,6 +128,59 @@ export default function Governance() {
             <div className="gov-item">
               <span className="gov-label">Uptime</span>
               <span className="gov-value">{formatDuration(Date.now() - startTime)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <h3>Execution SLO (7d)</h3>
+          <span className={`badge ${runTelemetry?.slo.breached ? "warn" : ""}`}>
+            {runTelemetry?.slo.breached ? "Breach" : "Healthy"}
+          </span>
+        </div>
+        <div className="card-body">
+          <div className="gov-grid">
+            <div className="gov-item">
+              <span className="gov-label">Success Rate</span>
+              <span className={`gov-value ${runTelemetry?.slo.success_rate_breached ? "warn" : "ok"}`}>
+                {runTelemetry ? `${runTelemetry.totals.success_rate_pct}%` : "-"}
+              </span>
+            </div>
+            <div className="gov-item">
+              <span className="gov-label">Latency p50 / p95</span>
+              <span className={`gov-value ${runTelemetry?.slo.latency_p95_breached ? "warn" : "neutral"}`}>
+                {runTelemetry
+                  ? `${formatMs(runTelemetry.latency.p50_ms)} / ${formatMs(runTelemetry.latency.p95_ms)}`
+                  : "-"}
+              </span>
+            </div>
+            <div className="gov-item">
+              <span className="gov-label">SLO Targets</span>
+              <span className="gov-value neutral">
+                {runTelemetry
+                  ? `p95 <= ${formatMs(runTelemetry.slo.targets.p95_latency_ms)}, success >= ${runTelemetry.slo.targets.success_rate_pct}%`
+                  : "-"}
+              </span>
+            </div>
+            <div className="gov-item">
+              <span className="gov-label">Runs Completed</span>
+              <span className="gov-value neutral">
+                {runTelemetry?.totals.runs_completed ?? "-"}
+              </span>
+            </div>
+            <div className="gov-item">
+              <span className="gov-label">Envelope Completeness</span>
+              <span className={`gov-value ${(runTelemetry?.totals.envelope_completeness_pct ?? 100) < 95 ? "warn" : "ok"}`}>
+                {runTelemetry ? `${runTelemetry.totals.envelope_completeness_pct}%` : "-"}
+              </span>
+            </div>
+            <div className="gov-item">
+              <span className="gov-label">Avg Approval Wait</span>
+              <span className="gov-value neutral">
+                {runTelemetry ? formatMs(runTelemetry.approval.avg_wait_ms) : "-"}
+              </span>
             </div>
           </div>
         </div>

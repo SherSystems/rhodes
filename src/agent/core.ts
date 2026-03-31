@@ -100,12 +100,65 @@ export class AgentCore {
    * The MAIN LOOP: plan, execute, observe, replan.
    */
   async run(goal: Goal): Promise<AgentRunResult> {
+    const runId = randomUUID();
     const startTime = Date.now();
     const errors: string[] = [];
     const outputs: StepOutput[] = [];
     let replans = 0;
     let stepsCompleted = 0;
     let stepsFailed = 0;
+    let totalApprovalWaitMs = 0;
+    let hadEscalation = false;
+
+    const finalizeRun = (result: AgentRunResult): AgentRunResult => {
+      this.eventBus.emit({
+        type: AgentEventType.RunCompleted,
+        timestamp: new Date().toISOString(),
+        data: {
+          run_id: runId,
+          goal_id: goal.id,
+          mode: goal.mode,
+          success: result.success,
+          duration_ms: result.duration_ms,
+          steps_completed: result.steps_completed,
+          steps_failed: result.steps_failed,
+          retry_count: result.replans,
+          approval_wait_ms: totalApprovalWaitMs,
+          errors: result.errors.length,
+          escalated: hadEscalation,
+        },
+      });
+      return result;
+    };
+
+    const emitRunEscalated = (
+      reason: string,
+      data: Record<string, unknown> = {},
+    ): void => {
+      hadEscalation = true;
+      this.eventBus.emit({
+        type: AgentEventType.RunEscalated,
+        timestamp: new Date().toISOString(),
+        data: {
+          run_id: runId,
+          goal_id: goal.id,
+          mode: goal.mode,
+          reason,
+          ...data,
+        },
+      });
+    };
+
+    this.eventBus.emit({
+      type: AgentEventType.RunStarted,
+      timestamp: new Date().toISOString(),
+      data: {
+        run_id: runId,
+        goal_id: goal.id,
+        mode: goal.mode,
+        goal: goal.description,
+      },
+    });
 
     // 1. Get cluster state (single + multi-cluster)
     const clusterState = await this.toolRegistry.getClusterState();
@@ -128,7 +181,7 @@ export class AgentCore {
       plan = await this.planner.plan(goal, planningContext);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      return {
+      return finalizeRun({
         success: false,
         plan: this.emptyPlan(goal.id),
         steps_completed: 0,
@@ -137,7 +190,7 @@ export class AgentCore {
         duration_ms: Date.now() - startTime,
         errors: [`Planning failed: ${errMsg}`],
         outputs,
-      };
+      });
     }
 
     // 4. Emit plan_created
@@ -150,6 +203,7 @@ export class AgentCore {
         step_count: plan.steps.length,
         reasoning: plan.reasoning,
         mode: goal.mode,
+        run_id: runId,
         steps: plan.steps.map((s) => ({
           id: s.id,
           action: s.action,
@@ -161,23 +215,47 @@ export class AgentCore {
 
     // 5. Request plan-level approval
     if (this.requiresPlanApproval(goal.mode, plan)) {
+      const requestId = `plan:${plan.id}`;
       this.eventBus.emit({
         type: AgentEventType.ApprovalRequested,
         timestamp: new Date().toISOString(),
-        data: { plan_id: plan.id, type: "plan_approval", mode: goal.mode },
+        data: {
+          request_id: requestId,
+          plan_id: plan.id,
+          type: "plan_approval",
+          mode: goal.mode,
+          run_id: runId,
+        },
       });
 
       const approvalGate = (this.governance as unknown as { approvalGate: { requestPlanApproval: (planId: string, goal: string, steps: { id: string; action: string; description: string; tier: string }[], reasoning: string) => Promise<boolean> } }).approvalGate;
+      const approvalStart = Date.now();
       const planApproved = await approvalGate.requestPlanApproval(
         plan.id,
         goal.description,
         plan.steps.map((s) => ({ id: s.id, action: s.action, description: s.description, tier: s.tier })),
         plan.reasoning,
       );
+      const approvalWaitMs = Date.now() - approvalStart;
+      totalApprovalWaitMs += approvalWaitMs;
+
+      this.eventBus.emit({
+        type: AgentEventType.ApprovalReceived,
+        timestamp: new Date().toISOString(),
+        data: {
+          request_id: requestId,
+          plan_id: plan.id,
+          type: "plan_approval",
+          mode: goal.mode,
+          approved: planApproved,
+          wait_ms: approvalWaitMs,
+          run_id: runId,
+        },
+      });
 
       if (!planApproved) {
         plan.status = "failed";
-        return {
+        return finalizeRun({
           success: false,
           plan,
           steps_completed: 0,
@@ -186,14 +264,14 @@ export class AgentCore {
           duration_ms: Date.now() - startTime,
           errors: ["Plan denied by user"],
           outputs,
-        };
+        });
       }
 
       plan.status = "approved";
       this.eventBus.emit({
         type: AgentEventType.PlanApproved,
         timestamp: new Date().toISOString(),
-        data: { plan_id: plan.id },
+        data: { plan_id: plan.id, run_id: runId },
       });
     }
 
@@ -222,7 +300,12 @@ export class AgentCore {
 
         // Inject plan ID into params so governance can check plan-level approval
         step.params._plan_id = activePlan.id;
-        const result = await this.executor.executeStep(step, goal.mode, activePlan.id);
+        const result = await this.executor.executeStep(
+          step,
+          goal.mode,
+          activePlan.id,
+          runId,
+        );
         step.result = result;
 
         // Capture step output for the CLI/frontends
@@ -245,13 +328,17 @@ export class AgentCore {
             this.eventBus.emit({
               type: AgentEventType.CircuitBreakerTripped,
               timestamp: new Date().toISOString(),
-              data: { plan_id: activePlan.id, step_id: step.id },
+              data: { plan_id: activePlan.id, step_id: step.id, run_id: runId },
+            });
+            emitRunEscalated("circuit_breaker_tripped", {
+              plan_id: activePlan.id,
+              step_id: step.id,
             });
             // Abort execution — mark remaining steps as skipped
             this.skipRemainingSteps(activePlan, executed);
             activePlan.status = "failed";
 
-            return {
+            return finalizeRun({
               success: false,
               plan: activePlan,
               steps_completed: stepsCompleted,
@@ -260,7 +347,7 @@ export class AgentCore {
               duration_ms: Date.now() - startTime,
               errors,
               outputs,
-            };
+            });
           }
 
           // Attempt replan
@@ -291,6 +378,7 @@ export class AgentCore {
               type: AgentEventType.Replan,
               timestamp: new Date().toISOString(),
               data: {
+                run_id: runId,
                 old_plan_id: activePlan.id,
                 new_plan_id: newPlan.id,
                 failed_step_id: step.id,
@@ -306,6 +394,11 @@ export class AgentCore {
                 })),
               },
             });
+            emitRunEscalated("replan_triggered", {
+              old_plan_id: activePlan.id,
+              new_plan_id: newPlan.id,
+              failed_step_id: step.id,
+            });
 
             if (newPlan.steps.length === 0) {
               // Replanner determined the goal is unachievable
@@ -313,7 +406,11 @@ export class AgentCore {
               errors.push(
                 `Replan produced no steps: ${newPlan.reasoning}`,
               );
-              return {
+              emitRunEscalated("replan_exhausted", {
+                old_plan_id: activePlan.id,
+                failed_step_id: step.id,
+              });
+              return finalizeRun({
                 success: false,
                 plan: activePlan,
                 steps_completed: stepsCompleted,
@@ -322,7 +419,7 @@ export class AgentCore {
                 duration_ms: Date.now() - startTime,
                 errors,
                 outputs,
-              };
+              });
             }
 
             // Switch to the new plan
@@ -338,8 +435,13 @@ export class AgentCore {
             errors.push(`Replan failed: ${msg}`);
             this.skipRemainingSteps(activePlan, executed);
             activePlan.status = "failed";
+            emitRunEscalated("replan_failed", {
+              plan_id: activePlan.id,
+              step_id: step.id,
+              error: msg,
+            });
 
-            return {
+            return finalizeRun({
               success: false,
               plan: activePlan,
               steps_completed: stepsCompleted,
@@ -348,7 +450,7 @@ export class AgentCore {
               duration_ms: Date.now() - startTime,
               errors,
               outputs,
-            };
+            });
           }
         } else {
           // Step succeeded — observe the result
@@ -384,6 +486,8 @@ export class AgentCore {
                   action: step.action,
                   error: discrepancyMsg,
                   observation,
+                  plan_id: activePlan.id,
+                  run_id: runId,
                 },
               });
             }
@@ -412,7 +516,7 @@ export class AgentCore {
     // Save relevant memories
     this.saveRunMemories(goal, activePlan, allSucceeded);
 
-    return {
+    return finalizeRun({
       success: allSucceeded,
       plan: activePlan,
       steps_completed: stepsCompleted,
@@ -421,7 +525,7 @@ export class AgentCore {
       duration_ms: Date.now() - startTime,
       errors,
       outputs,
-    };
+    });
   }
 
   /**

@@ -27,6 +27,7 @@ export interface GovernanceDecision {
   needs_approval: boolean;
   reason: string;
   approval?: ApprovalResponse;
+  approval_wait_ms?: number;
 }
 
 // ── Re-exports ──────────────────────────────────────────────
@@ -158,8 +159,10 @@ export class GovernanceEngine {
       timestamp: new Date().toISOString(),
     };
 
+    const approvalStart = Date.now();
     const approval =
       await this.approvalGate.requestApproval(approvalRequest);
+    const approvalWaitMs = Date.now() - approvalStart;
 
     return {
       allowed: approval.approved,
@@ -169,6 +172,7 @@ export class GovernanceEngine {
         ? `Action "${action}" approved by ${approval.approved_by}.`
         : `Action "${action}" rejected by user.`,
       approval,
+      approval_wait_ms: approvalWaitMs,
     };
   }
 

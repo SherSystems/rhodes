@@ -252,6 +252,9 @@ export interface Alert {
 // ── Events (for dashboard streaming) ─────────────────────────
 
 export enum AgentEventType {
+  RunStarted = "run_started",
+  RunCompleted = "run_completed",
+  RunEscalated = "run_escalated",
   PlanCreated = "plan_created",
   PlanApproved = "plan_approved",
   StepStarted = "step_started",

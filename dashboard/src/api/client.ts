@@ -33,6 +33,11 @@ export const fetchAudit = (limit = 100) =>
 export const fetchAuditStats = () =>
   request<Record<string, unknown>>("/api/audit/stats");
 
+export const fetchRunTelemetry = (days = 7) =>
+  request<import("../types").RunTelemetrySummary>(
+    `/api/telemetry/runs?days=${encodeURIComponent(String(days))}`,
+  );
+
 // Health
 export const fetchPredictions = () =>
   request<{ predictions: import("../types").Prediction[] }>("/api/health/predictions");

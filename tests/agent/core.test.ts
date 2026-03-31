@@ -381,6 +381,21 @@ describe("AgentCore", () => {
       expect(events[0].data.step_count).toBe(1);
       expect(events[0].data.goal).toBe("List VMs");
     });
+
+    it("emits run_started and run_completed with the same run_id", async () => {
+      const started: any[] = [];
+      const completed: any[] = [];
+      eventBus.on(AgentEventType.RunStarted, (e) => started.push(e));
+      eventBus.on(AgentEventType.RunCompleted, (e) => completed.push(e));
+
+      await agent.run(mockGoal);
+
+      expect(started).toHaveLength(1);
+      expect(completed).toHaveLength(1);
+      expect(started[0].data.run_id).toBeDefined();
+      expect(completed[0].data.run_id).toBe(started[0].data.run_id);
+      expect(completed[0].data.success).toBe(true);
+    });
   });
 
   // ── investigate() ─────────────────────────────────────────

@@ -21,6 +21,7 @@ import type { ChaosEngine } from "../../chaos/engine.js";
 import { linearRegression, predictTimeToThreshold } from "../../monitoring/anomaly.js";
 import type { DataPoint as AnomalyDataPoint } from "../../monitoring/anomaly.js";
 import { metricStore } from "../../monitoring/metric-store.js";
+import type { RunTelemetryCollector } from "../../monitoring/run-telemetry.js";
 
 // ── SSE Client Tracking ────────────────────────────────────
 
@@ -47,6 +48,7 @@ export class DashboardServer {
     private readonly toolRegistry: ToolRegistry,
     private readonly eventBus: EventBus,
     private readonly audit: AuditLog,
+    private readonly runTelemetry?: RunTelemetryCollector,
   ) {
     // Create a read-only IncidentManager that loads persisted incidents from disk
     this.incidentManager = new IncidentManager(eventBus, join(getDataDir(), "healing"));
@@ -179,6 +181,9 @@ export class DashboardServer {
           break;
         case "/api/metrics/history":
           this.handleMetricsHistory(res, url);
+          break;
+        case "/api/telemetry/runs":
+          this.handleRunTelemetry(res, url);
           break;
         case "/api/agent/command":
           if (req.method === "POST") {
@@ -648,6 +653,28 @@ export class DashboardServer {
     } catch (err) {
       console.error("[DashboardServer] Metrics history error:", err);
       this.json(res, { error: "Failed to fetch metric history" }, 500);
+    }
+  }
+
+  private handleRunTelemetry(res: ServerResponse, url: URL): void {
+    try {
+      if (!this.runTelemetry) {
+        this.json(res, { error: "Run telemetry is not available" }, 503);
+        return;
+      }
+
+      const daysParam = url.searchParams.get("days");
+      const days = daysParam ? parseInt(daysParam, 10) : 7;
+      if (!Number.isFinite(days) || days <= 0 || days > 90) {
+        this.json(res, { error: "Invalid days parameter; expected integer 1-90" }, 400);
+        return;
+      }
+
+      const summary = this.runTelemetry.getSummary(days);
+      this.json(res, summary);
+    } catch (err) {
+      console.error("[DashboardServer] Run telemetry error:", err);
+      this.json(res, { error: "Failed to fetch run telemetry" }, 500);
     }
   }
 

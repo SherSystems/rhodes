@@ -20,6 +20,7 @@ import { vClawMCP } from "./frontends/mcp.js";
 import { AutopilotDaemon } from "./autopilot/daemon.js";
 import { HealingOrchestrator } from "./healing/orchestrator.js";
 import { ChaosEngine } from "./chaos/engine.js";
+import { RunTelemetryCollector } from "./monitoring/run-telemetry.js";
 import { join } from "path";
 import { mkdirSync } from "fs";
 
@@ -38,6 +39,7 @@ async function main() {
 
   // Initialize event bus
   const eventBus = new EventBus();
+  const runTelemetry = new RunTelemetryCollector(eventBus);
 
   // Initialize governance
   const governance = new GovernanceEngine(policy);
@@ -92,6 +94,7 @@ async function main() {
   // Handle shutdown
   const shutdown = async () => {
     console.log("\nShutting down vClaw...");
+    runTelemetry.close();
     await registry.disconnectAll();
     process.exit(0);
   };
@@ -119,7 +122,8 @@ async function main() {
         agentCore,
         registry,
         eventBus,
-        governance.audit
+        governance.audit,
+        runTelemetry,
       );
       await dashboard.start();
 
@@ -164,7 +168,8 @@ async function main() {
         agentCore,
         registry,
         eventBus,
-        governance.audit
+        governance.audit,
+        runTelemetry,
       );
       await dashboard.start();
       break;
@@ -180,7 +185,8 @@ async function main() {
         agentCore,
         registry,
         eventBus,
-        governance.audit
+        governance.audit,
+        runTelemetry,
       );
       await dashboard.start();
 
@@ -244,7 +250,8 @@ async function main() {
         agentCore,
         registry,
         eventBus,
-        governance.audit
+        governance.audit,
+        runTelemetry,
       );
       await dashboard.start();
 

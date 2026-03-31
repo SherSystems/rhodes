@@ -232,6 +232,49 @@ export interface AuditEntry {
   approval?: string;
 }
 
+export interface RunTelemetrySummary {
+  window: {
+    from: string;
+    to: string;
+    days: number;
+  };
+  totals: {
+    runs_started: number;
+    runs_completed: number;
+    successful_runs: number;
+    failed_runs: number;
+    success_rate_pct: number;
+    complete_envelopes: number;
+    envelope_completeness_pct: number;
+  };
+  latency: {
+    p50_ms: number | null;
+    p95_ms: number | null;
+    avg_ms: number | null;
+  };
+  approval: {
+    total_wait_ms: number;
+    avg_wait_ms: number;
+  };
+  retries: {
+    total: number;
+    avg_per_run: number;
+  };
+  escalations: {
+    total: number;
+    rate_pct: number;
+  };
+  slo: {
+    targets: {
+      p95_latency_ms: number;
+      success_rate_pct: number;
+    };
+    breached: boolean;
+    latency_p95_breached: boolean;
+    success_rate_breached: boolean;
+  };
+}
+
 export interface Toast {
   id: string;
   type: "error" | "warning" | "success" | "info";
