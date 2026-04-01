@@ -14,6 +14,18 @@ function makePolicy(overrides: Partial<PolicyConfig> = {}): PolicyConfig {
       investigate_mode: "approve_all",
       ...overrides.approval,
     },
+    orchestration: {
+      approval: {
+        explicit_tiers: ["destructive", "never"],
+        ...overrides.orchestration?.approval,
+      },
+      rollback: {
+        enabled: true,
+        trigger_tiers: ["risky_write", "destructive"],
+        timeout_s: 60,
+        ...overrides.orchestration?.rollback,
+      },
+    },
     guardrails: {
       max_vms_per_action: 5,
       max_ram_allocation_pct: 80,
@@ -246,6 +258,32 @@ describe("GovernanceEngine", () => {
       );
       // Destructive still requires individual approval even with plan approval
       expect(decision.needs_approval).toBe(true);
+    });
+
+    it("explicit approval tiers cannot be bypassed by plan-level approval", async () => {
+      const strictPolicy = makePolicy({
+        approval: { build_mode: "auto", watch_mode: "auto", investigate_mode: "auto" },
+        orchestration: {
+          approval: { explicit_tiers: ["risky_write", "destructive", "never"] },
+          rollback: { enabled: true, trigger_tiers: ["risky_write", "destructive"], timeout_s: 60 },
+        },
+      });
+      engine.close();
+      dbPath = makeDbPath();
+      engine = new GovernanceEngine(strictPolicy, dbPath);
+
+      await engine.approvalGate.requestPlanApproval("plan-strict", "goal", [], "reason");
+
+      engine.approvalGate.setExternalHandler(async () => false);
+      const decision = await engine.evaluate(
+        "stop_vm",
+        { _plan_id: "plan-strict", vmid: 102 },
+        "build",
+        mockTools,
+      );
+      expect(decision.allowed).toBe(false);
+      expect(decision.needs_approval).toBe(true);
+      expect(decision.explicit_approval_required).toBe(true);
     });
 
     it("allows actions with allowed network and storage", async () => {

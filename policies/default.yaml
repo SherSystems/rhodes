@@ -3,6 +3,17 @@ approval:
   build_mode: approve_plan
   watch_mode: approve_risky
   investigate_mode: approve_fix
+orchestration:
+  approval:
+    explicit_tiers:
+      - destructive
+      - never
+  rollback:
+    enabled: true
+    trigger_tiers:
+      - risky_write
+      - destructive
+    timeout_s: 60
 guardrails:
   max_vms_per_action: 5
   max_ram_allocation_pct: 80

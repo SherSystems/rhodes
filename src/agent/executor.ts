@@ -28,8 +28,11 @@ export interface GovernanceEngineRef {
     tier: ActionTier;
     needs_approval: boolean;
     reason: string;
-    approval?: { request_id: string; approved: boolean };
+    approval?: { request_id: string; approved: boolean; method?: "cli" | "dashboard" | "auto" };
     approval_wait_ms?: number;
+    explicit_approval_required?: boolean;
+    rollback_required?: boolean;
+    rollback_timeout_ms?: number;
   }>;
   logAction(entry: AuditEntry): void;
   circuitBreaker: {
@@ -125,6 +128,12 @@ export class Executor {
       return result;
     }
 
+    const explicitApprovalRequired = evaluation.explicit_approval_required === true;
+    const rollbackRequired = evaluation.rollback_required === true;
+    const rollbackTimeoutMs = this.resolveRollbackTimeoutMs(
+      evaluation.rollback_timeout_ms,
+    );
+
     // If approval flow was involved, emit request/response events so telemetry can
     // capture wait durations and approval outcomes.
     if (evaluation.needs_approval) {
@@ -167,6 +176,27 @@ export class Executor {
       }
     }
 
+    // Guard against bypass: unsafe tiers must have explicit human approval.
+    if (
+      explicitApprovalRequired
+      && (!evaluation.approval || !evaluation.approval.approved || evaluation.approval.method === "auto")
+    ) {
+      const result = this.buildFailedResult(
+        startTime,
+        "Unsafe action blocked: explicit approval required",
+      );
+      this.emitStepFailed(step, result, planId, runId);
+      this.logAudit(
+        step,
+        mode,
+        "blocked",
+        result,
+        planId,
+        "Explicit approval required",
+      );
+      return result;
+    }
+
     // Capture state before execution
     let stateBefore: Record<string, unknown> | undefined;
     try {
@@ -181,9 +211,34 @@ export class Executor {
     // Execute the tool (via sandbox if available, otherwise direct)
     let toolResult: { success: boolean; data?: unknown; error?: string };
     try {
-      toolResult = this.sandbox
-        ? await this.sandbox.execute(step.action, step.params)
-        : await this.toolRegistry.execute(step.action, step.params);
+      const outcome = await this.executeToolWithTimeout(
+        step.action,
+        step.params,
+        rollbackRequired ? rollbackTimeoutMs : undefined,
+      );
+
+      if (outcome.timed_out) {
+        const result = this.buildFailedResult(
+          startTime,
+          `Tool execution timed out after ${rollbackTimeoutMs}ms`,
+          stateBefore,
+        );
+        this.governance.circuitBreaker.track(false);
+        this.emitStepFailed(step, result, planId, runId);
+        this.logAudit(step, mode, "failed", result, planId);
+        this.emitRollbackTrigger(
+          step,
+          result.error || "Tool execution timed out",
+          "timeout",
+          rollbackRequired,
+          rollbackTimeoutMs,
+          planId,
+          runId,
+        );
+        return result;
+      }
+
+      toolResult = outcome.tool_result;
     } catch (err) {
       const result = this.buildFailedResult(
         startTime,
@@ -193,6 +248,15 @@ export class Executor {
       this.governance.circuitBreaker.track(false);
       this.emitStepFailed(step, result, planId, runId);
       this.logAudit(step, mode, "failed", result, planId);
+      this.emitRollbackTrigger(
+        step,
+        result.error || "Tool execution threw",
+        "failure",
+        rollbackRequired,
+        rollbackTimeoutMs,
+        planId,
+        runId,
+      );
       return result;
     }
 
@@ -237,6 +301,15 @@ export class Executor {
       this.governance.circuitBreaker.track(false);
       this.emitStepFailed(step, result, planId, runId);
       this.logAudit(step, mode, "failed", result, planId);
+      this.emitRollbackTrigger(
+        step,
+        result.error || "Tool returned failure",
+        "failure",
+        rollbackRequired,
+        rollbackTimeoutMs,
+        planId,
+        runId,
+      );
       return result;
     }
   }
@@ -255,6 +328,92 @@ export class Executor {
       state_before: stateBefore,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  private resolveRollbackTimeoutMs(timeoutMs?: number): number {
+    if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      return Math.floor(timeoutMs);
+    }
+    return 60_000;
+  }
+
+  private async executeToolWithTimeout(
+    action: string,
+    params: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<
+    | { timed_out: false; tool_result: { success: boolean; data?: unknown; error?: string } }
+    | { timed_out: true; tool_result: { success: false; error: string } }
+  > {
+    const executePromise = this.sandbox
+      ? this.sandbox.execute(action, params)
+      : this.toolRegistry.execute(action, params);
+
+    if (!timeoutMs) {
+      return {
+        timed_out: false,
+        tool_result: await executePromise,
+      };
+    }
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<{ timed_out: true; tool_result: { success: false; error: string } }>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        resolve({
+          timed_out: true,
+          tool_result: {
+            success: false,
+            error: `Tool execution timed out after ${timeoutMs}ms`,
+          },
+        });
+      }, timeoutMs);
+    });
+
+    const wrappedExecution = executePromise.then((toolResult) => ({
+      timed_out: false as const,
+      tool_result: toolResult,
+    }));
+
+    const winner = await Promise.race([wrappedExecution, timeoutPromise]);
+
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+
+    if (winner.timed_out) {
+      // The original execution may still resolve/reject later; prevent unhandled rejections.
+      void executePromise.catch(() => undefined);
+    }
+
+    return winner;
+  }
+
+  private emitRollbackTrigger(
+    step: PlanStep,
+    error: string,
+    trigger: "failure" | "timeout",
+    rollbackRequired: boolean,
+    timeoutMs: number,
+    planId?: string,
+    runId?: string,
+  ): void {
+    if (!rollbackRequired) return;
+
+    this.eventBus.emit({
+      type: AgentEventType.RunEscalated,
+      timestamp: new Date().toISOString(),
+      data: {
+        run_id: runId,
+        plan_id: planId,
+        step_id: step.id,
+        action: step.action,
+        tier: step.tier,
+        reason: "rollback_triggered",
+        trigger,
+        timeout_ms: timeoutMs,
+        error,
+      },
+    });
   }
 
   private emitStepCompleted(

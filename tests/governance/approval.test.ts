@@ -12,6 +12,16 @@ function makePolicy(overrides: Partial<PolicyConfig["approval"]> = {}): PolicyCo
       watch_mode: overrides.watch_mode ?? "approve_risky",
       investigate_mode: overrides.investigate_mode ?? "approve_all",
     },
+    orchestration: {
+      approval: {
+        explicit_tiers: ["destructive", "never"],
+      },
+      rollback: {
+        enabled: true,
+        trigger_tiers: ["risky_write", "destructive"],
+        timeout_s: 60,
+      },
+    },
     guardrails: {
       max_vms_per_action: 5,
       max_ram_allocation_pct: 80,
@@ -96,6 +106,13 @@ describe("ApprovalGate", () => {
     it("uses investigate_mode for investigate agent mode", () => {
       const policy = makePolicy({ investigate_mode: "approve_all" });
       expect(gate.needsApproval("safe_write", "investigate", policy)).toBe(true);
+    });
+
+    it("forces explicit tiers to require approval regardless of mode matrix", () => {
+      const policy = makePolicy({ build_mode: "auto" });
+      policy.orchestration.approval.explicit_tiers = ["risky_write", "destructive", "never"];
+      expect(gate.needsApproval("risky_write", "build", policy)).toBe(true);
+      expect(gate.requiresExplicitApproval("risky_write", policy)).toBe(true);
     });
   });
 

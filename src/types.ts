@@ -134,6 +134,16 @@ export interface PolicyConfig {
     watch_mode: ApprovalMode;
     investigate_mode: ApprovalMode;
   };
+  orchestration: {
+    approval: {
+      explicit_tiers: ActionTier[];
+    };
+    rollback: {
+      enabled: boolean;
+      trigger_tiers: ActionTier[];
+      timeout_s: number;
+    };
+  };
   guardrails: {
     max_vms_per_action: number;
     max_ram_allocation_pct: number;

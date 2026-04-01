@@ -28,6 +28,9 @@ export interface GovernanceDecision {
   reason: string;
   approval?: ApprovalResponse;
   approval_wait_ms?: number;
+  explicit_approval_required?: boolean;
+  rollback_required?: boolean;
+  rollback_timeout_ms?: number;
 }
 
 // ── Re-exports ──────────────────────────────────────────────
@@ -74,6 +77,8 @@ export class GovernanceEngine {
     mode: AgentMode,
     tools: ToolDefinition[],
   ): Promise<GovernanceDecision> {
+    const rollbackDefaults = this.getRollbackPolicy("read");
+
     // 1. Circuit breaker check
     if (this.circuitBreaker.isTripped()) {
       return {
@@ -82,11 +87,19 @@ export class GovernanceEngine {
         needs_approval: false,
         reason:
           "Circuit breaker is tripped due to consecutive failures. Waiting for cooldown.",
+        explicit_approval_required: false,
+        rollback_required: false,
+        rollback_timeout_ms: rollbackDefaults.timeoutMs,
       };
     }
 
     // 2. Classify the action
     const tier = classifyAction(action, params, tools);
+    const explicitApprovalRequired = this.approvalGate.requiresExplicitApproval(
+      tier,
+      this.policy,
+    );
+    const rollbackPolicy = this.getRollbackPolicy(tier);
 
     // 3. Forbidden tier — always blocked
     if (tier === "never") {
@@ -95,6 +108,9 @@ export class GovernanceEngine {
         tier,
         needs_approval: false,
         reason: `Action "${action}" is classified as forbidden and cannot be executed.`,
+        explicit_approval_required: false,
+        rollback_required: false,
+        rollback_timeout_ms: rollbackPolicy.timeoutMs,
       };
     }
 
@@ -105,6 +121,9 @@ export class GovernanceEngine {
         tier,
         needs_approval: false,
         reason: `Action "${action}" is in the policy forbidden actions list.`,
+        explicit_approval_required: explicitApprovalRequired,
+        rollback_required: false,
+        rollback_timeout_ms: rollbackPolicy.timeoutMs,
       };
     }
 
@@ -116,6 +135,9 @@ export class GovernanceEngine {
         tier,
         needs_approval: false,
         reason: guardrailViolation,
+        explicit_approval_required: explicitApprovalRequired,
+        rollback_required: false,
+        rollback_timeout_ms: rollbackPolicy.timeoutMs,
       };
     }
 
@@ -133,19 +155,29 @@ export class GovernanceEngine {
         needs_approval: false,
         reason: `Action "${action}" (${tier}) auto-approved under ${mode} mode.`,
         approval: this.approvalGate.autoApprove(randomUUID()),
+        explicit_approval_required: explicitApprovalRequired,
+        rollback_required: rollbackPolicy.required,
+        rollback_timeout_ms: rollbackPolicy.timeoutMs,
       };
     }
 
     // 6b. If the plan was already approved at plan-level, skip step-level approval
-    //     (except for destructive actions which always require explicit approval)
+    //     only when this tier does not require explicit per-step approval.
     const planId = params._plan_id as string | undefined;
-    if (planId && tier !== "destructive" && this.approvalGate.isPlanApproved(planId)) {
+    if (
+      planId
+      && !explicitApprovalRequired
+      && this.approvalGate.isPlanApproved(planId)
+    ) {
       return {
         allowed: true,
         tier,
         needs_approval: false,
         reason: `Action "${action}" (${tier}) covered by plan-level approval.`,
         approval: this.approvalGate.autoApprove(randomUUID()),
+        explicit_approval_required: false,
+        rollback_required: rollbackPolicy.required,
+        rollback_timeout_ms: rollbackPolicy.timeoutMs,
       };
     }
 
@@ -163,16 +195,24 @@ export class GovernanceEngine {
     const approval =
       await this.approvalGate.requestApproval(approvalRequest);
     const approvalWaitMs = Date.now() - approvalStart;
+    const explicitApproved =
+      !explicitApprovalRequired
+      || (approval.approved && approval.method !== "auto");
 
     return {
-      allowed: approval.approved,
+      allowed: approval.approved && explicitApproved,
       tier,
       needs_approval: true,
-      reason: approval.approved
-        ? `Action "${action}" approved by ${approval.approved_by}.`
-        : `Action "${action}" rejected by user.`,
+      reason: !approval.approved
+        ? `Action "${action}" rejected by user.`
+        : !explicitApproved
+          ? `Action "${action}" requires explicit human approval and auto-approval is not allowed.`
+          : `Action "${action}" approved by ${approval.approved_by}.`,
       approval,
       approval_wait_ms: approvalWaitMs,
+      explicit_approval_required: explicitApprovalRequired,
+      rollback_required: rollbackPolicy.required,
+      rollback_timeout_ms: rollbackPolicy.timeoutMs,
     };
   }
 
@@ -261,5 +301,21 @@ export class GovernanceEngine {
     }
 
     return null;
+  }
+
+  private getRollbackPolicy(
+    tier: ActionTier,
+  ): { required: boolean; timeoutMs: number } {
+    const cfg = this.policy.orchestration.rollback;
+    const timeoutMs = cfg.timeout_s * 1000;
+    const required =
+      cfg.enabled
+      && cfg.trigger_tiers.includes(tier)
+      && tier !== "never";
+
+    return {
+      required,
+      timeoutMs,
+    };
   }
 }

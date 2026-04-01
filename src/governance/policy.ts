@@ -28,6 +28,25 @@ const YamlApprovalModeSchema = z.enum([
   "auto",
 ]);
 
+const ActionTierSchema = z.enum([
+  "read",
+  "safe_write",
+  "risky_write",
+  "destructive",
+  "never",
+]);
+
+const DefaultOrchestrationPolicy = {
+  approval: {
+    explicit_tiers: ["destructive", "never"] as const,
+  },
+  rollback: {
+    enabled: true,
+    trigger_tiers: ["risky_write", "destructive"] as const,
+    timeout_s: 60,
+  },
+};
+
 const PolicyConfigSchema = z.object({
   version: z.number().int().positive(),
   approval: z.object({
@@ -35,6 +54,31 @@ const PolicyConfigSchema = z.object({
     watch_mode: YamlApprovalModeSchema,
     investigate_mode: YamlApprovalModeSchema,
   }),
+  orchestration: z
+    .object({
+      approval: z.object({
+        explicit_tiers: z.array(ActionTierSchema).default(
+          [...DefaultOrchestrationPolicy.approval.explicit_tiers],
+        ),
+      }),
+      rollback: z.object({
+        enabled: z.boolean().default(DefaultOrchestrationPolicy.rollback.enabled),
+        trigger_tiers: z.array(ActionTierSchema).default(
+          [...DefaultOrchestrationPolicy.rollback.trigger_tiers],
+        ),
+        timeout_s: z.number().int().positive().default(DefaultOrchestrationPolicy.rollback.timeout_s),
+      }),
+    })
+    .default({
+      approval: {
+        explicit_tiers: [...DefaultOrchestrationPolicy.approval.explicit_tiers],
+      },
+      rollback: {
+        enabled: DefaultOrchestrationPolicy.rollback.enabled,
+        trigger_tiers: [...DefaultOrchestrationPolicy.rollback.trigger_tiers],
+        timeout_s: DefaultOrchestrationPolicy.rollback.timeout_s,
+      },
+    }),
   guardrails: z.object({
     max_vms_per_action: z.number().int().positive(),
     max_ram_allocation_pct: z.number().min(1).max(100),
@@ -105,6 +149,16 @@ export function loadPolicy(path?: string): PolicyConfig {
       investigate_mode: normalizeApprovalMode(
         validated.approval.investigate_mode,
       ),
+    },
+    orchestration: {
+      approval: {
+        explicit_tiers: validated.orchestration.approval.explicit_tiers,
+      },
+      rollback: {
+        enabled: validated.orchestration.rollback.enabled,
+        trigger_tiers: validated.orchestration.rollback.trigger_tiers,
+        timeout_s: validated.orchestration.rollback.timeout_s,
+      },
     },
   };
 

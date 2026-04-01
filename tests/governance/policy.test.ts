@@ -63,6 +63,17 @@ describe("loadPolicy", () => {
       log_rejected_plans: true,
       retention_days: 90,
     });
+
+    // orchestration
+    expect(policy.orchestration.approval.explicit_tiers).toEqual([
+      "destructive",
+      "never",
+    ]);
+    expect(policy.orchestration.rollback).toEqual({
+      enabled: true,
+      trigger_tiers: ["risky_write", "destructive"],
+      timeout_s: 60,
+    });
   });
 
   it('normalizes "approve_fix" to "approve_risky" in investigate_mode', () => {

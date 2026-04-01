@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Executor, type GovernanceEngineRef } from "../../src/agent/executor.js";
 import { EventBus } from "../../src/agent/events.js";
 import type { ToolRegistry } from "../../src/tools/registry.js";
@@ -41,6 +41,10 @@ function makeMockGovernance(
     needsApproval?: boolean;
     approved?: boolean;
     approvalWaitMs?: number;
+    approvalMethod?: "cli" | "dashboard" | "auto";
+    explicitApprovalRequired?: boolean;
+    rollbackRequired?: boolean;
+    rollbackTimeoutMs?: number;
   },
 ): GovernanceEngineRef {
   const {
@@ -49,6 +53,10 @@ function makeMockGovernance(
     needsApproval = false,
     approved = true,
     approvalWaitMs = 0,
+    approvalMethod = "cli",
+    explicitApprovalRequired = false,
+    rollbackRequired = false,
+    rollbackTimeoutMs = 60_000,
   } = overrides ?? {};
   return {
     evaluate: vi.fn().mockResolvedValue({
@@ -57,9 +65,12 @@ function makeMockGovernance(
       needs_approval: needsApproval,
       reason: allowed ? "Auto-approved" : "Blocked by policy",
       approval: needsApproval
-        ? { request_id: "req-1", approved }
+        ? { request_id: "req-1", approved, method: approvalMethod }
         : undefined,
       approval_wait_ms: needsApproval ? approvalWaitMs : undefined,
+      explicit_approval_required: explicitApprovalRequired,
+      rollback_required: rollbackRequired,
+      rollback_timeout_ms: rollbackTimeoutMs,
     }),
     logAction: vi.fn(),
     circuitBreaker: {
@@ -83,6 +94,10 @@ describe("Executor", () => {
     eventBus = new EventBus();
     vi.spyOn(eventBus, "emit");
     executor = new Executor(toolRegistry, governance, eventBus);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   // ── Success path ────────────────────────────────────────
@@ -206,6 +221,25 @@ describe("Executor", () => {
     expect(toolRegistry.execute).not.toHaveBeenCalled();
   });
 
+  it("blocks unsafe actions when explicit approval is required but auto-approved", async () => {
+    governance = makeMockGovernance({
+      needsApproval: true,
+      approved: true,
+      approvalMethod: "auto",
+      explicitApprovalRequired: true,
+    });
+    eventBus = new EventBus();
+    vi.spyOn(eventBus, "emit");
+    executor = new Executor(toolRegistry, governance, eventBus);
+
+    const step = makeStep({ tier: "destructive" });
+    const result = await executor.executeStep(step, "build");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("explicit approval required");
+    expect(toolRegistry.execute).not.toHaveBeenCalled();
+  });
+
   it("emits approval_requested and step_failed when approval not granted", async () => {
     governance = makeMockGovernance({ needsApproval: true, approved: false, approvalWaitMs: 2300 });
     eventBus = new EventBus();
@@ -269,6 +303,31 @@ describe("Executor", () => {
     expect(auditEntry.result).toBe("failed");
   });
 
+  it("emits rollback trigger when high-risk action fails", async () => {
+    governance = makeMockGovernance({
+      rollbackRequired: true,
+      rollbackTimeoutMs: 60_000,
+    });
+    eventBus = new EventBus();
+    vi.spyOn(eventBus, "emit");
+    executor = new Executor(toolRegistry, governance, eventBus);
+
+    (toolRegistry.execute as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: false,
+      error: "VM limit reached",
+    });
+
+    const step = makeStep({ tier: "risky_write" });
+    await executor.executeStep(step, "build", "plan_1", "run_1");
+
+    const emitCalls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const escalated = emitCalls.map((c) => c[0]).find((e) => e.type === "run_escalated");
+    expect(escalated).toBeDefined();
+    expect(escalated?.data.reason).toBe("rollback_triggered");
+    expect(escalated?.data.trigger).toBe("failure");
+    expect(escalated?.data.timeout_ms).toBe(60_000);
+  });
+
   // ── Tool throws exception ──────────────────────────────
 
   it("returns failed result when tool throws an exception", async () => {
@@ -293,6 +352,36 @@ describe("Executor", () => {
     await executor.executeStep(step, "build");
 
     expect(governance.circuitBreaker.track).toHaveBeenCalledWith(false);
+  });
+
+  it("triggers rollback when high-risk execution times out", async () => {
+    vi.useFakeTimers();
+    governance = makeMockGovernance({
+      rollbackRequired: true,
+      rollbackTimeoutMs: 25,
+    });
+    eventBus = new EventBus();
+    vi.spyOn(eventBus, "emit");
+    executor = new Executor(toolRegistry, governance, eventBus);
+
+    (toolRegistry.execute as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => await new Promise(() => undefined),
+    );
+
+    const step = makeStep({ tier: "risky_write" });
+    const pending = executor.executeStep(step, "build", "plan_2", "run_2");
+
+    await vi.advanceTimersByTimeAsync(30);
+    const result = await pending;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("timed out");
+
+    const emitCalls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const escalated = emitCalls.map((c) => c[0]).find((e) => e.type === "run_escalated");
+    expect(escalated).toBeDefined();
+    expect(escalated?.data.reason).toBe("rollback_triggered");
+    expect(escalated?.data.trigger).toBe("timeout");
   });
 
   // ── Governance evaluate throws ─────────────────────────

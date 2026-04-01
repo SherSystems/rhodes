@@ -98,6 +98,14 @@ export class ApprovalGate {
   isPlanApproved(planId: string): boolean {
     return this.approvedPlans.has(planId);
   }
+  requiresExplicitApproval(
+    tier: ActionTier,
+    policy: PolicyConfig,
+  ): boolean {
+    if (tier === "never") return false;
+    return policy.orchestration.approval.explicit_tiers.includes(tier);
+  }
+
   /**
    * Determine whether an action at a given tier needs human approval
    * under the current agent mode and policy.
@@ -112,6 +120,10 @@ export class ApprovalGate {
 
     // "never" tier actions are always blocked — not approvable
     if (tier === "never") return false;
+
+    if (this.requiresExplicitApproval(tier, policy)) {
+      return true;
+    }
 
     const approvalMode = this.getApprovalMode(mode, policy);
     return APPROVAL_MATRIX[approvalMode]?.has(tier) ?? true;
