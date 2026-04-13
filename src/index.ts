@@ -189,6 +189,11 @@ async function main() {
       );
       await dashboard.start();
 
+      // Migration adapter
+      if (migrationAdapter) {
+        (dashboard as unknown as { migrationAdapter: MigrationAdapter }).migrationAdapter = migrationAdapter;
+      }
+
       // If autopilot is enabled, start it alongside dashboard
       if (config.autopilot.enabled) {
         const autopilot = new AutopilotDaemon(

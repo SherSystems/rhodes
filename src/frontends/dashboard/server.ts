@@ -132,6 +132,9 @@ export class DashboardServer {
         case "/api/cluster":
           this.handleCluster(res);
           break;
+        case "/api/cluster/all":
+          this.handleMultiCluster(res);
+          break;
         case "/api/agent/status":
           this.handleAgentStatus(res);
           break;
@@ -298,6 +301,15 @@ export class DashboardServer {
       this.json(res, state ?? { nodes: [], vms: [], containers: [], storage: [], timestamp: new Date().toISOString() });
     } catch (err) {
       this.json(res, { error: "Failed to fetch cluster state" }, 500);
+    }
+  }
+
+  private async handleMultiCluster(res: ServerResponse): Promise<void> {
+    try {
+      const state = await this.toolRegistry.getMultiClusterState();
+      this.json(res, state);
+    } catch (err) {
+      this.json(res, { error: "Failed to fetch multi-cluster state" }, 500);
     }
   }
 

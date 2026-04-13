@@ -1,9 +1,10 @@
 import { useEffect, useCallback } from "react";
 import { useStore } from "../store";
-import { fetchCluster, fetchIncidents } from "../api/client";
+import { fetchCluster, fetchMultiCluster, fetchIncidents } from "../api/client";
 
 export function useClusterPolling(intervalMs = 10000) {
   const setCluster = useStore((s) => s.setCluster);
+  const setMultiCluster = useStore((s) => s.setMultiCluster);
 
   const poll = useCallback(async () => {
     try {
@@ -17,7 +18,13 @@ export function useClusterPolling(intervalMs = 10000) {
     } catch {
       // ignore polling errors
     }
-  }, [setCluster]);
+    try {
+      const multi = await fetchMultiCluster();
+      setMultiCluster(multi);
+    } catch {
+      // ignore
+    }
+  }, [setCluster, setMultiCluster]);
 
   useEffect(() => {
     poll();

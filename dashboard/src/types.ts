@@ -339,4 +339,15 @@ export interface MigrationVM {
   diskGB: number;
 }
 
+export interface ProviderClusterState {
+  name: string;
+  type: string;
+  state: ClusterState;
+}
+
+export interface MultiClusterState {
+  providers: ProviderClusterState[];
+  timestamp: string;
+}
+
 export type TabId = "topology" | "plan" | "resources" | "nodes" | "incidents" | "governance" | "chaos" | "migrations";

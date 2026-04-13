@@ -18,6 +18,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const fetchCluster = () =>
   request<import("../types").ClusterState>("/api/cluster");
 
+export const fetchMultiCluster = () =>
+  request<import("../types").MultiClusterState>("/api/cluster/all");
+
 // Incidents
 export const fetchIncidents = () =>
   request<{

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   AgentMode,
   ClusterState,
+  MultiClusterState,
   Plan,
   StepState,
   AgentEvent,
@@ -29,6 +30,8 @@ interface DashboardState {
   // Cluster
   cluster: ClusterState | null;
   setCluster: (c: ClusterState) => void;
+  multiCluster: MultiClusterState | null;
+  setMultiCluster: (m: MultiClusterState) => void;
 
   // Plan
   plan: Plan | null;
@@ -104,6 +107,8 @@ export const useStore = create<DashboardState>((set) => ({
   setActiveTab: (t) => set({ activeTab: t }),
 
   cluster: null,
+  multiCluster: null,
+  setMultiCluster: (m) => set({ multiCluster: m }),
   setCluster: (c) =>
     set((s) => {
       const nodeHist = { ...s.nodeMetricHistory };
