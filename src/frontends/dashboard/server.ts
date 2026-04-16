@@ -21,6 +21,7 @@ import type { HealingOrchestrator } from "../../healing/orchestrator.js";
 import type { ChaosEngine } from "../../chaos/engine.js";
 import type { MigrationAdapter } from "../../migration/adapter.js";
 import type { MigrationPlan } from "../../migration/types.js";
+import type { TopologyStore } from "../../topology/store.js";
 import { linearRegression, predictTimeToThreshold } from "../../monitoring/anomaly.js";
 import type { DataPoint as AnomalyDataPoint } from "../../monitoring/anomaly.js";
 import { metricStore } from "../../monitoring/metric-store.js";
@@ -45,6 +46,7 @@ export class DashboardServer {
   healer?: HealingOrchestrator;
   chaosEngine?: ChaosEngine;
   migrationAdapter?: MigrationAdapter;
+  topologyStore?: TopologyStore;
   private migrationHistory: MigrationPlan[] = [];
 
   constructor(
@@ -115,7 +117,7 @@ export class DashboardServer {
 
     // CORS headers for local development
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
     if (req.method === "OPTIONS") {
@@ -223,9 +225,21 @@ export class DashboardServer {
             res.end(JSON.stringify({ error: "Method not allowed" }));
           }
           break;
+        case "/api/topology/apps":
+          if (req.method === "POST") {
+            this.handleTopologyCreateApp(req, res);
+          } else {
+            this.handleTopologyListApps(res);
+          }
+          break;
+        case "/api/topology/graph":
+          this.handleTopologyGraph(res);
+          break;
         default:
-          // Dynamic route: /api/incidents/:id/timeline
-          if (path.startsWith("/api/incidents/") && path.endsWith("/timeline")) {
+          // Dynamic topology routes: /api/topology/apps/:id, /api/topology/apps/:id/members, etc.
+          if (path.startsWith("/api/topology/")) {
+            this.handleTopologyDynamic(req, res, path);
+          } else if (path.startsWith("/api/incidents/") && path.endsWith("/timeline")) {
             const incidentId = path.replace("/api/incidents/", "").replace("/timeline", "");
             this.handleIncidentTimeline(res, incidentId);
           } else if (this.useReact && path.startsWith("/assets/")) {
@@ -988,6 +1002,148 @@ export class DashboardServer {
 
   private handleMigrationHistory(res: ServerResponse): void {
     this.json(res, { migrations: this.migrationHistory });
+  }
+
+  // ── Topology Handlers ──────────────────────────────────
+
+  private handleTopologyListApps(res: ServerResponse): void {
+    if (!this.topologyStore) {
+      this.json(res, { error: "Topology store not available" }, 503);
+      return;
+    }
+    try {
+      const apps = this.topologyStore.listApps();
+      this.json(res, apps);
+    } catch (err) {
+      console.error("[DashboardServer] Topology list apps error:", err);
+      this.json(res, { error: "Failed to list applications" }, 500);
+    }
+  }
+
+  private async handleTopologyCreateApp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.topologyStore) {
+      this.json(res, { error: "Topology store not available" }, 503);
+      return;
+    }
+    try {
+      const body = await this.parseBody(req);
+      const name = body.name as string;
+      const tier = body.tier as string;
+      if (!name || !tier) {
+        this.json(res, { error: "Missing required fields: name, tier" }, 400);
+        return;
+      }
+      const app = this.topologyStore.createApp(
+        name,
+        tier as any,
+        body.owner as string | undefined,
+        body.description as string | undefined,
+        body.tags as string[] | undefined,
+      );
+      this.json(res, app, 201);
+    } catch (err) {
+      console.error("[DashboardServer] Topology create app error:", err);
+      this.json(res, { error: "Failed to create application" }, 500);
+    }
+  }
+
+  private handleTopologyGraph(res: ServerResponse): void {
+    if (!this.topologyStore) {
+      this.json(res, { error: "Topology store not available" }, 503);
+      return;
+    }
+    try {
+      const graph = this.topologyStore.getTopologyGraph();
+      this.json(res, graph);
+    } catch (err) {
+      console.error("[DashboardServer] Topology graph error:", err);
+      this.json(res, { error: "Failed to get topology graph" }, 500);
+    }
+  }
+
+  private async handleTopologyDynamic(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
+    if (!this.topologyStore) {
+      this.json(res, { error: "Topology store not available" }, 503);
+      return;
+    }
+
+    try {
+      // /api/topology/impact/:vmId
+      if (path.startsWith("/api/topology/impact/")) {
+        const workloadId = path.replace("/api/topology/impact/", "");
+        const report = this.topologyStore.getImpactReport(workloadId);
+        this.json(res, report);
+        return;
+      }
+
+      // /api/topology/apps/:id/members/:workloadId (DELETE)
+      const memberDeleteMatch = path.match(/^\/api\/topology\/apps\/([^/]+)\/members\/([^/]+)$/);
+      if (memberDeleteMatch && req.method === "DELETE") {
+        this.topologyStore.removeMember(memberDeleteMatch[1], memberDeleteMatch[2]);
+        this.json(res, { ok: true });
+        return;
+      }
+
+      // /api/topology/apps/:id/members (POST)
+      const memberMatch = path.match(/^\/api\/topology\/apps\/([^/]+)\/members$/);
+      if (memberMatch && req.method === "POST") {
+        const body = await this.parseBody(req);
+        const appId = memberMatch[1];
+        const member = this.topologyStore.addMember(appId, {
+          workloadId: body.workload_id as string,
+          workloadType: body.workload_type as any,
+          provider: body.provider as any,
+          role: body.role as string,
+          critical: (body.critical as boolean) ?? false,
+          name: body.name as string | undefined,
+          ipAddress: body.ip_address as string | undefined,
+        });
+        this.json(res, member, 201);
+        return;
+      }
+
+      // /api/topology/apps/:id/dependencies (POST)
+      const depMatch = path.match(/^\/api\/topology\/apps\/([^/]+)\/dependencies$/);
+      if (depMatch && req.method === "POST") {
+        const body = await this.parseBody(req);
+        const appId = depMatch[1];
+        const dep = this.topologyStore.addDependency(appId, {
+          fromWorkloadId: body.from_workload as string,
+          toWorkloadId: body.to_workload as string,
+          port: body.port as number,
+          service: body.service as string,
+          protocol: (body.protocol as string) ?? "tcp",
+          latencyRequirement: ((body.latency_requirement as string) ?? "any") as any,
+          description: body.description as string | undefined,
+        });
+        this.json(res, dep, 201);
+        return;
+      }
+
+      // /api/topology/apps/:id (GET or DELETE)
+      const appMatch = path.match(/^\/api\/topology\/apps\/([^/]+)$/);
+      if (appMatch) {
+        const appId = appMatch[1];
+        if (req.method === "DELETE") {
+          this.topologyStore.deleteApp(appId);
+          this.json(res, { ok: true });
+          return;
+        }
+        // GET
+        const app = this.topologyStore.getApp(appId);
+        if (!app) {
+          this.json(res, { error: "Application not found" }, 404);
+          return;
+        }
+        this.json(res, app);
+        return;
+      }
+
+      this.json(res, { error: "Not found" }, 404);
+    } catch (err) {
+      console.error("[DashboardServer] Topology dynamic error:", err);
+      this.json(res, { error: "Topology operation failed" }, 500);
+    }
   }
 
   // ── Agent Command (Cmd+K palette) ──────────────────────

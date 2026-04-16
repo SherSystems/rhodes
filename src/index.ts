@@ -235,6 +235,9 @@ async function main() {
         (dashboard as unknown as { migrationAdapter: MigrationAdapter }).migrationAdapter = migrationAdapter;
       }
 
+      // Topology store
+      (dashboard as unknown as { topologyStore: TopologyStore }).topologyStore = topologyStore;
+
       // If autopilot is enabled, start it alongside dashboard
       if (config.autopilot.enabled) {
         const autopilot = new AutopilotDaemon(
@@ -348,6 +351,9 @@ async function main() {
         console.log("  Migration adapter ready");
       }
 
+      // Topology store
+      (dashboard as unknown as { topologyStore: TopologyStore }).topologyStore = topologyStore;
+
       console.log("  Chaos engineering engine ready");
 
       console.log("\nAll services running. Press Ctrl+C to stop.\n");
@@ -399,6 +405,9 @@ async function main() {
       if (migrationAdapter) {
         (dashboard as unknown as { migrationAdapter: MigrationAdapter }).migrationAdapter = migrationAdapter;
       }
+
+      // Topology store
+      (dashboard as unknown as { topologyStore: TopologyStore }).topologyStore = topologyStore;
 
       const cli = new vClawCLI(agentCore, registry, eventBus, governance);
       await cli.start();

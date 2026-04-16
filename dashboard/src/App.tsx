@@ -12,6 +12,7 @@ import Incidents from "./components/Incidents";
 import Governance from "./components/Governance";
 import Chaos from "./components/Chaos";
 import Migrations from "./components/Migrations";
+import AppTopology from "./components/AppTopology";
 import CommandPalette from "./components/CommandPalette";
 import ToastContainer from "./components/Toast";
 import type { TabId } from "./types";
@@ -23,6 +24,7 @@ const TABS: { id: TabId; label: string; icon?: string }[] = [
   { id: "nodes", label: "Nodes" },
   { id: "incidents", label: "Incidents" },
   { id: "governance", label: "Governance" },
+  { id: "apps", label: "Applications", icon: "🔗" },
   { id: "chaos", label: "Chaos", icon: "⚡" },
   { id: "migrations", label: "Migrations" },
 ];
@@ -68,6 +70,7 @@ export function App() {
             {activeTab === "nodes" && <Nodes />}
             {activeTab === "incidents" && <Incidents />}
             {activeTab === "governance" && <Governance />}
+            {activeTab === "apps" && <AppTopology />}
             {activeTab === "chaos" && <Chaos />}
             {activeTab === "migrations" && <Migrations />}
           </div>

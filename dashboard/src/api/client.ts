@@ -104,3 +104,31 @@ export const sendAgentCommand = (command: string) =>
     method: "POST",
     body: JSON.stringify({ command }),
   });
+
+// Topology
+export const fetchApps = () =>
+  request<import("../types").Application[]>("/api/topology/apps");
+
+export const fetchApp = (id: string) =>
+  request<import("../types").Application>(`/api/topology/apps/${id}`);
+
+export const createApp = (data: { name: string; tier: string; owner?: string; description?: string; tags?: string[] }) =>
+  request<import("../types").Application>("/api/topology/apps", { method: "POST", body: JSON.stringify(data) });
+
+export const deleteApp = (id: string) =>
+  request<void>(`/api/topology/apps/${id}`, { method: "DELETE" });
+
+export const addAppMember = (appId: string, member: { workload_id: string; workload_type: string; provider: string; role: string; critical?: boolean }) =>
+  request<any>(`/api/topology/apps/${appId}/members`, { method: "POST", body: JSON.stringify(member) });
+
+export const removeAppMember = (appId: string, workloadId: string) =>
+  request<void>(`/api/topology/apps/${appId}/members/${workloadId}`, { method: "DELETE" });
+
+export const addAppDependency = (appId: string, dep: { from_workload: string; to_workload: string; port: number; service: string; protocol?: string }) =>
+  request<any>(`/api/topology/apps/${appId}/dependencies`, { method: "POST", body: JSON.stringify(dep) });
+
+export const fetchTopologyGraph = () =>
+  request<import("../types").TopologyGraph>("/api/topology/graph");
+
+export const fetchImpactAnalysis = (workloadId: string) =>
+  request<import("../types").ImpactReport>(`/api/topology/impact/${workloadId}`);
