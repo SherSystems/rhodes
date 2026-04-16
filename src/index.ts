@@ -24,6 +24,8 @@ import { RunTelemetryCollector } from "./monitoring/run-telemetry.js";
 import { MigrationAdapter } from "./migration/adapter.js";
 import { VSphereClient } from "./providers/vmware/client.js";
 import { ProxmoxClient } from "./providers/proxmox/client.js";
+import { AWSAdapter } from "./providers/aws/adapter.js";
+import { AWSClient } from "./providers/aws/client.js";
 import { spawn } from "node:child_process";
 import type { SSHExecResult } from "./migration/types.js";
 import { join } from "path";
@@ -75,6 +77,17 @@ async function main() {
     registry.registerAdapter(vmware);
   }
 
+  // Register AWS adapter
+  if (config.aws.accessKeyId && config.aws.secretAccessKey) {
+    const aws = new AWSAdapter({
+      accessKeyId: config.aws.accessKeyId,
+      secretAccessKey: config.aws.secretAccessKey,
+      region: config.aws.region,
+      sessionToken: config.aws.sessionToken || undefined,
+    });
+    registry.registerAdapter(aws);
+  }
+
   // Register system adapter
   const system = new SystemAdapter({
     sshStrictHostKeyCheck: config.system.sshStrictHostKeyCheck,
@@ -124,6 +137,18 @@ async function main() {
       });
     };
 
+    // Create AWS client for migration if configured
+    let awsClient: AWSClient | undefined;
+    if (config.aws.accessKeyId && config.aws.secretAccessKey) {
+      awsClient = new AWSClient({
+        accessKeyId: config.aws.accessKeyId,
+        secretAccessKey: config.aws.secretAccessKey,
+        region: config.aws.region,
+        sessionToken: config.aws.sessionToken || undefined,
+      });
+      await awsClient.connect();
+    }
+
     migrationAdapter = new MigrationAdapter({
       vsphereClient: migVsphere,
       proxmoxClient: migProxmox,
@@ -134,6 +159,9 @@ async function main() {
       proxmoxUser: config.migration.proxmoxUser,
       proxmoxNode: config.migration.proxmoxNode,
       proxmoxStorage: config.migration.proxmoxStorage,
+      awsClient,
+      awsS3Bucket: config.aws.s3MigrationBucket,
+      awsS3Prefix: config.aws.s3MigrationPrefix,
     });
     await migrationAdapter.connect();
   }

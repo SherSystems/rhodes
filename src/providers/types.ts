@@ -104,7 +104,7 @@ export interface InfraAdapter {
 
 // ── Provider Configuration ──────────────────────────────────
 
-export type ProviderType = "proxmox" | "vmware" | "system" | "kubernetes";
+export type ProviderType = "proxmox" | "vmware" | "system" | "kubernetes" | "aws";
 
 export interface ProviderConfig {
   type: ProviderType;

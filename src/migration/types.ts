@@ -12,22 +12,28 @@ export type MigrationStatus =
   | "completed"
   | "failed";
 
-export type DiskFormat = "vmdk" | "qcow2" | "raw" | "vdi" | "vhdx";
+export type DiskFormat = "vmdk" | "qcow2" | "raw" | "vdi" | "vhdx" | "vhd" | "ova";
 
 export interface MigrationPlan {
   id: string;
   source: {
-    provider: "vmware" | "proxmox";
+    provider: "vmware" | "proxmox" | "aws";
     vmId: string;
     vmName: string;
     host: string;
+    instanceId?: string; // AWS EC2 instance ID
+    amiId?: string; // AWS AMI ID
   };
   target: {
-    provider: "vmware" | "proxmox";
+    provider: "vmware" | "proxmox" | "aws";
     node: string;
     host: string;
     storage: string;
     vmId?: number; // Proxmox VMID (assigned during import)
+    instanceType?: string; // AWS EC2 instance type
+    subnetId?: string; // AWS subnet
+    securityGroupIds?: string[]; // AWS security groups
+    amiId?: string; // AWS AMI (created during import)
   };
   vmConfig: MigrationVMConfig;
   status: MigrationStatus;

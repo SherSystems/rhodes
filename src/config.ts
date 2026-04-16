@@ -53,6 +53,16 @@ const MigrationConfigSchema = z.object({
   proxmoxStorage: z.string().default("local-lvm"),
 });
 
+const AWSConfigSchema = z.object({
+  accessKeyId: z.string().default(""),
+  secretAccessKey: z.string().default(""),
+  region: z.string().default("us-east-1"),
+  sessionToken: z.string().default(""),
+  s3MigrationBucket: z.string().default(""),
+  s3MigrationPrefix: z.string().default("vclaw-migration/"),
+  vmImportRoleArn: z.string().default(""),
+});
+
 const AutopilotConfigSchema = z.object({
   pollIntervalMs: z.coerce.number().default(30000),
   enabled: z
@@ -66,6 +76,7 @@ export const ConfigSchema = z.object({
   vmware: VMwareConfigSchema,
   system: SystemConfigSchema.default({ sshStrictHostKeyCheck: "true" }),
   ai: AIConfigSchema,
+  aws: AWSConfigSchema.default({}),
   dashboard: DashboardConfigSchema,
   migration: MigrationConfigSchema.default({}),
   autopilot: AutopilotConfigSchema,
@@ -99,6 +110,15 @@ export function getConfig(): Config {
       provider: process.env.AI_PROVIDER,
       apiKey: process.env.AI_API_KEY,
       model: process.env.AI_MODEL,
+    },
+    aws: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      region: process.env.AWS_REGION,
+      sessionToken: process.env.AWS_SESSION_TOKEN,
+      s3MigrationBucket: process.env.AWS_S3_MIGRATION_BUCKET,
+      s3MigrationPrefix: process.env.AWS_S3_MIGRATION_PREFIX,
+      vmImportRoleArn: process.env.AWS_VM_IMPORT_ROLE_ARN,
     },
     dashboard: {
       port: process.env.DASHBOARD_PORT,
