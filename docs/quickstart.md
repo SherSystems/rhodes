@@ -4,6 +4,7 @@ This quickstart walks through:
 
 - Proxmox setup (minimal homelab path)
 - VMware vSphere setup
+- Azure setup (service principal path)
 - Vault configuration for credential storage
 - First natural-language command
 - How the 5-tier safety governance works
@@ -13,7 +14,8 @@ This quickstart walks through:
 - Node.js 22+ recommended (18+ minimum)
 - Access to at least one provider:
   - Proxmox VE API token, or
-  - VMware vSphere credentials
+  - VMware vSphere credentials, or
+  - Azure service principal credentials
 - AI provider key (`anthropic` or `openai`)
 
 ## 2. Install and bootstrap
@@ -54,6 +56,36 @@ SYSTEM_SSH_STRICT_HOST_KEY_CHECK=true
 ```
 
 `src/index.ts` auto-registers VMware when `VMWARE_HOST` is set.
+
+## 3C. Azure config (service principal)
+
+Install Azure CLI and sign in:
+
+```bash
+az login
+az account set --subscription "<subscription-id>"
+```
+
+Create a service principal with subscription scope:
+
+```bash
+az ad sp create-for-rbac \
+  --name vclaw-sp \
+  --role Contributor \
+  --scopes /subscriptions/<subscription-id>
+```
+
+Set the returned credentials in `.env`:
+
+```env
+AZURE_TENANT_ID=<tenant-id>
+AZURE_CLIENT_ID=<app-id>
+AZURE_CLIENT_SECRET=<client-secret>
+AZURE_SUBSCRIPTION_ID=<subscription-id>
+AZURE_DEFAULT_LOCATION=eastus
+```
+
+`src/index.ts` auto-registers Azure when `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_SUBSCRIPTION_ID` are set.
 
 ## 4. AI provider config
 

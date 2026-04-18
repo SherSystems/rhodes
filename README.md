@@ -10,11 +10,12 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/Tests-1141_passing-FF9500" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-1265_passing-FF9500" alt="Tests" />
   <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/Node.js_22+-339933?logo=node.js&logoColor=white" alt="Node.js" />
   <img src="https://img.shields.io/badge/Proxmox_VE-E57000?logo=proxmox&logoColor=white" alt="Proxmox" />
   <img src="https://img.shields.io/badge/VMware_vSphere-607078?logo=vmware&logoColor=white" alt="VMware" />
+  <img src="https://img.shields.io/badge/Azure-0078D4?logo=microsoftazure&logoColor=white" alt="Azure" />
 </p>
 
 <p align="center">
@@ -53,7 +54,7 @@ vClaw will analyze your infrastructure across all connected providers, generate 
 
 | Feature | vClaw | VMware Aria | Terraform | Kubiya | Ansible |
 |---------|-------|-------------|-----------|--------|---------|
-| **Multi-hypervisor** | Native (Proxmox + VMware) | VMware only | Via providers | Cloud only | Via modules |
+| **Multi-hypervisor** | Native (Proxmox + VMware + Azure) | VMware only | Via providers | Cloud only | Via modules |
 | **Autonomous execution** | Yes | Recommendations only | Code generation | Yes | Playbook-based |
 | **Natural language** | First-class | No | AI copilot | Yes | AI copilot |
 | **Safety governance** | 5-tier + approval gates | Enterprise | Policy engine | Basic | Manual |
@@ -70,7 +71,7 @@ No other tool combines multi-hypervisor support, autonomous execution, natural l
 ### Prerequisites
 
 - Node.js 18+ (22+ recommended)
-- Access to at least one infrastructure provider (Proxmox or VMware vSphere)
+- Access to at least one infrastructure provider (Proxmox, VMware vSphere, or Azure)
 - An AI API key (Anthropic Claude, OpenAI, or compatible)
 
 ### Installation
@@ -97,6 +98,13 @@ PROXMOX_TOKEN_SECRET=your-token-secret
 VMWARE_HOST=vcenter.local
 VMWARE_USER=administrator@vsphere.local
 VMWARE_PASSWORD=your-password
+
+# Azure
+AZURE_TENANT_ID=your-tenant-id
+AZURE_CLIENT_ID=your-app-client-id
+AZURE_CLIENT_SECRET=your-client-secret
+AZURE_SUBSCRIPTION_ID=your-subscription-id
+AZURE_DEFAULT_LOCATION=eastus
 
 # System Adapter SSH policy (secure-by-default)
 SYSTEM_SSH_STRICT_HOST_KEY_CHECK=true
@@ -135,7 +143,7 @@ npm run dev:mcp
 
 ## Documentation
 
-- [Quickstart Guide](docs/quickstart.md) (Proxmox + VMware setup paths, first command, governance walkthrough)
+- [Quickstart Guide](docs/quickstart.md) (Proxmox + VMware + Azure setup paths, first command, governance walkthrough)
 - [Provider Authoring Guide](docs/provider-authoring-guide.md) (implementing and registering new adapters)
 - [CHANGELOG](CHANGELOG.md) (including 0.2.0 draft release notes)
 
@@ -173,11 +181,12 @@ vClaw runs an autonomous agent loop:
 Manage multiple infrastructure platforms from a single agent:
 
 - **Proxmox VE**: 30+ tools covering VMs, containers, nodes, storage, snapshots, firewall rules, migrations, and cluster management
-- **VMware vSphere**: 18+ tools for VMs, hosts, datastores, snapshots, guest operations, and resource pools
+- **VMware vSphere**: 27 tools for VMs, hosts, datastores, snapshots, guest operations, and resource pools
+- **Azure**: 17 tools across ARM Compute, Network, and Resources (VMs, disks, vnets, subnets, NSGs, images)
 - **System**: SSH and local execution for package management, script execution, and configuration
 - **Kubernetes (scaffold)**: `ProviderAdapter` skeleton with documented planned `kubectl`/API integration points
-- **Cross-Provider Migration**: Bidirectional VM migration between VMware and Proxmox with disk conversion (VMDK ↔ QCOW2)
-- **Pluggable**: Provider abstraction layer makes it straightforward to add AWS, Azure, Kubernetes, or any other platform
+- **Cross-Provider Migration**: Migration flows across VMware, Proxmox, and AWS with disk conversion plus optional S3-based transfer paths
+- **Pluggable**: Provider abstraction layer makes it straightforward to add more clouds and platforms
 
 ### Enterprise Safety (NemoClaw-Inspired)
 
@@ -279,10 +288,11 @@ vClaw (14,000+ lines of TypeScript)
 │
 ├── Provider Layer (plugin architecture)
 │   ├── Proxmox Adapter     30+ infrastructure tools
-│   ├── VMware Adapter      18+ infrastructure tools
+│   ├── VMware Adapter      27 infrastructure tools
+│   ├── Azure Adapter       17 infrastructure tools
 │   ├── System Adapter      SSH and local execution
 │   ├── Kubernetes Adapter  Scaffold (state + integration call map)
-│   └── [Planned]           AWS, Azure (full adapters)
+│   └── [Planned]           Expanded AWS + Kubernetes coverage
 │
 ├── Security Layer (NemoClaw-inspired)
 │   ├── Credential Vault    AES-256-GCM encrypted secrets
@@ -311,17 +321,18 @@ vClaw (14,000+ lines of TypeScript)
 
 ## Testing
 
-1141 tests across the entire codebase:
+1265 tests across the entire codebase:
 
 - **Agent core**: Planning, execution, observation, memory, replanning
-- **Providers**: Proxmox and VMware tool coverage
-- **Migration**: VMware ↔ Proxmox exporters, importers, disk conversion, orchestration
+- **Providers**: Proxmox, VMware, and Azure adapter coverage
+- **Migration**: VMware/Proxmox/AWS exporters, importers, disk conversion, orchestration
+- **Release 0.2 additions**: 65 AWS tests + 58 Azure tests
 - **Security**: Vault encryption/decryption, privacy router redaction, sandbox isolation, audit integrity
 - **Governance**: Risk classification, approval gates, circuit breaker behavior
 - **Edge cases**: 163 dedicated tests for boundary conditions, null handling, unicode, concurrent access, and error paths
 
 ```bash
-npm test              # Run all 1141 tests
+npm test              # Run all 1265 tests
 npm run test:watch    # Watch mode for development
 npm run test:coverage # Generate coverage report
 ```
@@ -332,18 +343,19 @@ npm run test:coverage # Generate coverage report
 
 ### Phase 1: Multi-Provider Foundation (current)
 - [x] Proxmox VE provider (30+ tools)
-- [x] VMware vSphere provider (18+ tools)
+- [x] VMware vSphere provider (27 tools)
+- [x] Azure provider (ARM Compute, Network, Resources)
 - [x] Multi-provider orchestration
-- [x] Cross-provider VM migration (VMware ↔ Proxmox)
+- [x] Cross-provider VM migration (VMware, Proxmox, AWS flows)
 - [x] NemoClaw-inspired security model
 - [x] Self-healing and chaos engineering
-- [x] Real-time web dashboard with multi-provider topology
+- [x] Dashboard-v2 rollout (live server now serves `dashboard-v2/dist`)
 - [x] MCP server for Claude Desktop
-- [x] 1141 passing tests
+- [x] 1265 passing tests
 
 ### Phase 2: Enterprise (Q2 2026)
 - [ ] Kubernetes provider (EKS, AKS, GKE)
-- [ ] AWS provider (EC2, RDS, S3, ELB)
+- [ ] Expanded AWS provider surface (RDS, S3, ELB)
 - [ ] Multi-tenant support with RBAC
 - [ ] SSO/SAML authentication
 - [ ] Compliance exports (SOC 2, ISO 27001)
