@@ -31,7 +31,6 @@ const DIRECTION_CASES: DirectionCase[] = [
 
 const PLAN_ONLY_DIRECTIONS = new Set([
   "azure_to_vmware",
-  "azure_to_aws",
 ]);
 
 function getSourceId(source: DirectionCase["source"]): string | number {
@@ -81,7 +80,6 @@ describeLive("Live migration matrix (env-gated)", () => {
 
   it.each([
     "azure_to_vmware",
-    "azure_to_aws",
   ])(
     "returns explicit execute messaging for current Azure-involved direction %s",
     async (direction) => {

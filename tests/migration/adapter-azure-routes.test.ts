@@ -17,6 +17,10 @@ const awsExporterMocks = vi.hoisted(() => ({
   exportInstance: vi.fn(),
 }));
 
+const awsImporterMocks = vi.hoisted(() => ({
+  importVM: vi.fn(),
+}));
+
 const cloudUploaderMocks = vi.hoisted(() => ({
   uploadDiskFromSSHToAzurePageBlob: vi.fn(async () => undefined),
 }));
@@ -51,6 +55,13 @@ vi.mock("../../src/migration/aws-exporter.js", () => {
     exportInstance = awsExporterMocks.exportInstance;
   }
   return { AWSExporter };
+});
+
+vi.mock("../../src/migration/aws-importer.js", () => {
+  class AWSImporter {
+    importVM = awsImporterMocks.importVM;
+  }
+  return { AWSImporter };
 });
 
 vi.mock("../../src/migration/cloud-uploader.js", () => ({
@@ -119,6 +130,7 @@ describe("MigrationAdapter Azure direction routes", () => {
     vmwareExporterMocks.transferDisk.mockReset();
     proxmoxExporterMocks.exportVM.mockReset();
     awsExporterMocks.exportInstance.mockReset();
+    awsImporterMocks.importVM.mockReset();
     cloudUploaderMocks.uploadDiskFromSSHToAzurePageBlob.mockReset();
     blobStorageMocks.createIfNotExists.mockReset();
     blobStorageMocks.getPageBlobClient.mockReset();
@@ -540,6 +552,101 @@ describe("MigrationAdapter Azure direction routes", () => {
         status: "completed",
         source: expect.objectContaining({ provider: "aws", instanceId: "i-0123" }),
         target: expect.objectContaining({ provider: "azure", resourceGroup: "vclaw-migrations" }),
+      }),
+    );
+  });
+
+  it("executes azure_to_aws migration with snapshot export and AWS import path", async () => {
+    const vmArmId = "/subscriptions/sub-1234/resourceGroups/vclaw-qa/providers/Microsoft.Compute/virtualMachines/Migration-TestVM";
+    const diskArmId = "/subscriptions/sub-1234/resourceGroups/vclaw-disks/providers/Microsoft.Compute/disks/migration-testvm-osdisk";
+
+    const sshExec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    const azureClient = {
+      defaultLocation: "eastus",
+      getVM: vi.fn(async () => ({
+        id: vmArmId,
+        name: "Migration-TestVM",
+        resourceGroup: "vclaw-qa",
+        location: "eastus",
+        vmSize: "Standard_B2s",
+        powerState: "running",
+        provisioningState: "Succeeded",
+        networkInterfaceIds: [],
+        osDiskId: diskArmId,
+        dataDiskIds: [],
+        tags: {},
+        osType: "Linux",
+      })),
+      listDisks: vi.fn(async () => [
+        {
+          id: diskArmId,
+          name: "migration-testvm-osdisk",
+          resourceGroup: "vclaw-disks",
+          location: "eastus",
+          sizeGB: 64,
+          diskState: "Attached",
+          encrypted: false,
+          attachedVmId: vmArmId,
+        },
+      ]),
+      createSnapshot: vi.fn(async () => ({
+        id: "/subscriptions/sub-1234/resourceGroups/vclaw-disks/providers/Microsoft.Compute/snapshots/migration-testvm-snap",
+        name: "migration-testvm-snap",
+        resourceGroup: "vclaw-disks",
+        location: "eastus",
+        sizeGB: 64,
+        sourceDiskId: diskArmId,
+        provisioningState: "Succeeded",
+        encrypted: false,
+      })),
+      grantSnapshotReadAccess: vi.fn(async () => "https://storage.example/snap.vhd?sv=mock"),
+      revokeSnapshotAccess: vi.fn(async () => undefined),
+      deleteSnapshot: vi.fn(async () => undefined),
+    } as any;
+
+    awsImporterMocks.importVM.mockResolvedValue({
+      amiId: "ami-0123",
+      instanceId: "i-0abcdef1234567890",
+      instanceType: "m5.large",
+      privateIp: "10.0.0.25",
+    });
+
+    const adapter = createAdapter({
+      awsClient: {} as any,
+      awsS3Bucket: "vclaw-migration",
+      awsS3Prefix: "vclaw-migration/",
+      azureClient,
+      sshExec: sshExec as any,
+    });
+
+    const result = await adapter.execute("migrate_azure_to_aws", { vm_id: "vclaw-qa/Migration-TestVM" });
+
+    expect(result.success, String(result.error)).toBe(true);
+    expect(azureClient.createSnapshot).toHaveBeenCalled();
+    expect(azureClient.grantSnapshotReadAccess).toHaveBeenCalled();
+    expect(sshExec).toHaveBeenCalledWith(
+      "192.168.86.50",
+      "root",
+      expect.stringContaining("curl --fail --location"),
+      7_200_000,
+    );
+    expect(awsImporterMocks.importVM).toHaveBeenCalledWith(
+      expect.objectContaining({
+        diskFormat: "vhd",
+        diskPath: expect.stringContaining("/tmp/vclaw-migration/azure-aws-"),
+        vmConfig: expect.objectContaining({ name: "Migration-TestVM" }),
+      }),
+      "192.168.86.50",
+      "root",
+    );
+    expect(azureClient.revokeSnapshotAccess).toHaveBeenCalled();
+    expect(azureClient.deleteSnapshot).toHaveBeenCalled();
+    expect(result.data).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        source: expect.objectContaining({ provider: "azure", vmId: "vclaw-qa/Migration-TestVM" }),
+        target: expect.objectContaining({ provider: "aws", instanceId: "i-0abcdef1234567890" }),
       }),
     );
   });
