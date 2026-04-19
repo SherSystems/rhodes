@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/Tests-1265_passing-FF9500" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-1338_passing-FF9500" alt="Tests" />
   <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/Node.js_22+-339933?logo=node.js&logoColor=white" alt="Node.js" />
   <img src="https://img.shields.io/badge/Proxmox_VE-E57000?logo=proxmox&logoColor=white" alt="Proxmox" />
@@ -143,7 +143,7 @@ npm run dev:mcp
 
 ## Documentation
 
-- [Quickstart Guide](docs/quickstart.md) (Proxmox + VMware + Azure setup paths, first command, governance walkthrough)
+- [Quickstart Guide](docs/quickstart.md) (Proxmox + VMware + Azure + AWS setup paths, migration execution prerequisites, governance walkthrough)
 - [Architecture Guide](docs/architecture.md) (core system design, adapter model, governance, and extension points)
 - [Provider Guides Index](docs/providers/README.md) (Azure, Proxmox, VMware, AWS, Kubernetes scaffold)
 - [Azure Provider Guide](docs/providers/azure.md) (reference template for provider docs)
@@ -152,7 +152,7 @@ npm run dev:mcp
 - [AWS Provider Guide](docs/providers/aws.md) (16 tools for EC2, EBS, VPC, AMI workflows)
 - [Kubernetes Provider Guide](docs/providers/kubernetes.md) (current scaffold behavior and planned integration points)
 - [Provider Authoring Guide](docs/provider-authoring-guide.md) (implementing and registering new adapters)
-- [CHANGELOG](CHANGELOG.md) (including 0.2.0 draft release notes)
+- [CHANGELOG](CHANGELOG.md) (including 0.2.x draft release notes)
 
 ---
 
@@ -193,7 +193,7 @@ Manage multiple infrastructure platforms from a single agent:
 - **AWS**: 16 tools across EC2 lifecycle, EBS snapshots, AMI workflows, VPCs, subnets, and security groups
 - **System**: SSH and local execution for package management, script execution, and configuration
 - **Kubernetes (scaffold)**: `ProviderAdapter` skeleton with documented planned `kubectl`/API integration points
-- **Cross-Provider Migration**: Migration flows across VMware, Proxmox, and AWS with disk conversion plus optional S3-based transfer paths
+- **Cross-Provider Migration**: Migration flows across VMware, Proxmox, AWS, and Azure (including executed Proxmox → Azure runs)
 - **Pluggable**: Provider abstraction layer makes it straightforward to add more clouds and platforms
 
 ### Enterprise Safety (NemoClaw-Inspired)
@@ -213,6 +213,9 @@ Migrate VMs between hypervisors with zero manual steps:
 
 - **VMware → Proxmox**: Export VM config, SCP VMDK, convert to QCOW2, create target VM, boot
 - **Proxmox → VMware**: Export QCOW2, convert to VMDK, import to ESXi via `vim-cmd`, register with vCenter
+- **Proxmox → Azure (execute path)**: Export disk, convert to raw, stream upload to Azure page blob, import managed disk, create VM, and run rollback cleanup on failure
+- **Cloud uploader architecture**: Stream disks over SSH from source host through vClaw into AWS S3 / Azure page blobs (no `aws` or `az` CLI required on source hypervisor hosts)
+- **AWS import acceleration**: ImportSnapshot-first path for raw disks, RegisterImage with HVM/ENA/UEFI-preferred defaults, tuned multipart upload (`queueSize=8`, `partSize=64 MiB`), and ImportImage fallback retained
 - Real-time progress tracking in the dashboard with per-step status
 - Disk format conversion (VMDK ↔ QCOW2) handled automatically
 - Full plan preview before execution with blast radius and config summary
@@ -329,18 +332,18 @@ vClaw (14,000+ lines of TypeScript)
 
 ## Testing
 
-1265 tests across the entire codebase:
+1358 tests in the suite (1338 passing, 20 skipped):
 
 - **Agent core**: Planning, execution, observation, memory, replanning
 - **Providers**: Proxmox, VMware, and Azure adapter coverage
-- **Migration**: VMware/Proxmox/AWS exporters, importers, disk conversion, orchestration
-- **Release 0.2 additions**: 65 AWS tests + 58 Azure tests
+- **Migration**: VMware/Proxmox/AWS/Azure planning + execution paths, disk conversion, cloud upload, and import pipelines
+- **Release 0.2.x additions**: cloud-uploader coverage, Azure workload-analyzer coverage, Azure route matrix tests, AWS importer snapshot/fallback tests, dashboard-v2 migration progress tests
 - **Security**: Vault encryption/decryption, privacy router redaction, sandbox isolation, audit integrity
 - **Governance**: Risk classification, approval gates, circuit breaker behavior
 - **Edge cases**: 163 dedicated tests for boundary conditions, null handling, unicode, concurrent access, and error paths
 
 ```bash
-npm test              # Run all 1265 tests
+npm test              # Run full suite (1338 passing, 20 skipped as of 2026-04-19)
 npm run test:watch    # Watch mode for development
 npm run test:coverage # Generate coverage report
 ```
@@ -354,12 +357,13 @@ npm run test:coverage # Generate coverage report
 - [x] VMware vSphere provider (27 tools)
 - [x] Azure provider (ARM Compute, Network, Resources)
 - [x] Multi-provider orchestration
-- [x] Cross-provider VM migration (VMware, Proxmox, AWS flows)
+- [x] Cross-provider VM migration (VMware, Proxmox, AWS flows + Proxmox → Azure execute)
+- [x] Cloud uploader architecture for S3/page-blob transfer without source-host cloud CLIs
 - [x] NemoClaw-inspired security model
 - [x] Self-healing and chaos engineering
 - [x] Dashboard-v2 rollout (live server now serves `dashboard-v2/dist`)
 - [x] MCP server for Claude Desktop
-- [x] 1265 passing tests
+- [x] 1338 passing tests (20 skipped)
 
 ### Phase 2: Enterprise (Q2 2026)
 - [ ] Kubernetes provider (EKS, AKS, GKE)

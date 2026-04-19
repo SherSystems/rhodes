@@ -6,6 +6,7 @@ This quickstart walks through:
 - VMware vSphere setup
 - Azure setup (service principal path)
 - AWS setup (access key path)
+- Migration execution prerequisites (including Proxmox -> Azure execute)
 - Kubernetes status (current scaffold behavior)
 - Vault configuration for credential storage
 - First natural-language command
@@ -122,6 +123,32 @@ Kubernetes support is currently scaffold-only:
 
 Use `docs/providers/kubernetes.md` as the source-of-truth status page until first-class support ships.
 
+## 3F. Migration execution prerequisites
+
+For execute-mode migration workflows (not just planning), add:
+
+```env
+# Required for AWS-backed migration transfers
+AWS_S3_MIGRATION_BUCKET=your-migration-bucket
+AWS_S3_MIGRATION_PREFIX=vclaw-migration/
+
+# Required for Proxmox-backed migration execution
+MIGRATION_PROXMOX_HOST=proxmox.lab.local
+MIGRATION_PROXMOX_USER=root
+MIGRATION_PROXMOX_NODE=pve
+MIGRATION_PROXMOX_STORAGE=local-lvm
+
+# Required for VMware-backed migration execution
+MIGRATION_ESXI_HOST=esxi.lab.local
+MIGRATION_ESXI_USER=root
+```
+
+Notes:
+
+- `migrate_proxmox_to_azure` is now fully executable end-to-end (export, convert, upload, managed-disk import, VM create).
+- Azure execute routes other than Proxmox -> Azure still return plan-only scaffolds for now; use their `plan_migration_*` tools until disk transfer/import is implemented.
+- vClaw now streams disk uploads over SSH through the app process and cloud SDKs, so source hypervisor hosts do not need local `aws` or `az` CLI installs for migration upload steps.
+
 ## 4. AI provider config
 
 ```env
@@ -166,6 +193,7 @@ Then try a planning/execution request:
 
 ```text
 Create a VM with 2 cores and 4GB RAM on the host with the most free memory
+Migrate Proxmox VM 112 to Azure in eastus and show me each execution step
 ```
 
 ## 7. Understand 5-tier safety governance
