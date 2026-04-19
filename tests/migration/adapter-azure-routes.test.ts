@@ -13,6 +13,10 @@ const proxmoxExporterMocks = vi.hoisted(() => ({
   exportVM: vi.fn(),
 }));
 
+const awsExporterMocks = vi.hoisted(() => ({
+  exportInstance: vi.fn(),
+}));
+
 const cloudUploaderMocks = vi.hoisted(() => ({
   uploadDiskFromSSHToAzurePageBlob: vi.fn(async () => undefined),
 }));
@@ -40,6 +44,13 @@ vi.mock("../../src/migration/proxmox-exporter.js", () => {
     exportVM = proxmoxExporterMocks.exportVM;
   }
   return { ProxmoxExporter };
+});
+
+vi.mock("../../src/migration/aws-exporter.js", () => {
+  class AWSExporter {
+    exportInstance = awsExporterMocks.exportInstance;
+  }
+  return { AWSExporter };
 });
 
 vi.mock("../../src/migration/cloud-uploader.js", () => ({
@@ -107,6 +118,7 @@ describe("MigrationAdapter Azure direction routes", () => {
     vmwareExporterMocks.datastorePathToFs.mockReset();
     vmwareExporterMocks.transferDisk.mockReset();
     proxmoxExporterMocks.exportVM.mockReset();
+    awsExporterMocks.exportInstance.mockReset();
     cloudUploaderMocks.uploadDiskFromSSHToAzurePageBlob.mockReset();
     blobStorageMocks.createIfNotExists.mockReset();
     blobStorageMocks.getPageBlobClient.mockReset();
@@ -265,12 +277,12 @@ describe("MigrationAdapter Azure direction routes", () => {
 
   it("surfaces explicit plan-only execution messaging for Azure execute calls", async () => {
     const adapter = createAdapter();
-    vi.spyOn(adapter as any, "executePlanAWSToAzure").mockResolvedValue({
+    vi.spyOn(adapter as any, "executePlanAzureToVMware").mockResolvedValue({
       success: true,
       data: { plan: { id: "plan-1", steps: [] } },
     });
 
-    const result = await adapter.execute("migrate_aws_to_azure", { instance_id: "i-0123" });
+    const result = await adapter.execute("migrate_azure_to_vmware", { vm_id: "vclaw-qa/Migration-TestVM" });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("has not been implemented yet");
@@ -401,6 +413,132 @@ describe("MigrationAdapter Azure direction routes", () => {
       expect.objectContaining({
         status: "completed",
         source: expect.objectContaining({ provider: "vmware", vmId: "vm-200" }),
+        target: expect.objectContaining({ provider: "azure", resourceGroup: "vclaw-migrations" }),
+      }),
+    );
+  });
+
+  it("executes aws_to_azure migration with Azure disk import path", async () => {
+    const pageBlobClient = {
+      url: "https://vclawmig.blob.core.windows.net/vhds/migration-disk.vhd",
+      deleteIfExists: vi.fn(async () => undefined),
+    };
+    const containerClient = {
+      createIfNotExists: vi.fn(async () => undefined),
+      getPageBlobClient: vi.fn(() => pageBlobClient),
+    };
+    blobStorageMocks.getPageBlobClient.mockReturnValue(pageBlobClient);
+    blobStorageMocks.fromConnectionString.mockReturnValue({
+      getContainerClient: vi.fn(() => containerClient),
+    });
+    blobStorageMocks.parsePermissions.mockReturnValue("cw");
+    blobStorageMocks.generateSas.mockReturnValue({ toString: () => "sv=2024-01-01&sig=mock" });
+
+    const sshExec = vi.fn(async (_host: string, _user: string, cmd: string) => {
+      if (cmd.includes("stat -c%s")) {
+        return { stdout: "1073741824\n", stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+
+    awsExporterMocks.exportInstance.mockResolvedValue({
+      instanceId: "i-0123",
+      amiId: "ami-0123",
+      s3Bucket: "vclaw-migration",
+      s3Key: "vclaw-migration/i-0123/disk.vmdk",
+      vmConfig: {
+        name: "aws-i-0123",
+        cpuCount: 2,
+        coresPerSocket: 1,
+        memoryMiB: 4096,
+        guestOS: "otherLinux64Guest",
+        disks: [
+          {
+            label: "/dev/sda1",
+            capacityBytes: 20 * 1024 * 1024 * 1024,
+            sourcePath: "ebs://vol-0123",
+            sourceFormat: "raw",
+            targetFormat: "vmdk",
+          },
+        ],
+        nics: [],
+        firmware: "bios",
+      },
+    });
+
+    const azureClient = {
+      defaultLocation: "eastus",
+      subscriptionId: "sub-1234",
+      ensureResourceGroup: vi.fn(async () => undefined),
+      ensureStorageAccount: vi.fn(async () => ({
+        id: "/subscriptions/sub-1234/resourceGroups/vclaw-migrations/providers/Microsoft.Storage/storageAccounts/vclawmigabc123",
+        name: "vclawmigabc123",
+        location: "eastus",
+      })),
+      ensureBlobContainer: vi.fn(async () => undefined),
+      getStorageAccountKey: vi.fn(async () => "storage-account-key"),
+      createManagedDiskFromImport: vi.fn(async () => ({
+        id: "/subscriptions/sub-1234/resourceGroups/vclaw-migrations/providers/Microsoft.Compute/disks/aws-i-0123-osdisk",
+        name: "aws-i-0123-osdisk",
+        resourceGroup: "vclaw-migrations",
+        location: "eastus",
+        sizeGB: 20,
+        diskState: "Unattached",
+        encrypted: false,
+      })),
+      listVNets: vi.fn(async () => [
+        { id: "vnet-1", name: "default-vnet", resourceGroup: "vclaw-migrations", location: "eastus", addressSpaces: ["10.0.0.0/16"], subnetCount: 1 },
+      ]),
+      listSubnets: vi.fn(async () => [
+        { id: "/subscriptions/sub-1234/resourceGroups/vclaw-migrations/providers/Microsoft.Network/virtualNetworks/default-vnet/subnets/default", name: "default", resourceGroup: "vclaw-migrations", vnetName: "default-vnet", addressPrefix: "10.0.0.0/24" },
+      ]),
+      createVMFromManagedDisk: vi.fn(async () => ({
+        id: "/subscriptions/sub-1234/resourceGroups/vclaw-migrations/providers/Microsoft.Compute/virtualMachines/aws-i-0123",
+        name: "aws-i-0123",
+        resourceGroup: "vclaw-migrations",
+        location: "eastus",
+        vmSize: "Standard_B2s",
+        powerState: "unknown",
+        provisioningState: "Succeeded",
+        osType: "Linux",
+      })),
+      deleteVM: vi.fn(async () => undefined),
+      deleteDisk: vi.fn(async () => undefined),
+    } as any;
+
+    const adapter = createAdapter({
+      awsClient: {} as any,
+      awsS3Bucket: "vclaw-migration",
+      awsS3Prefix: "vclaw-migration/",
+      sshExec: sshExec as any,
+      azureClient,
+    });
+
+    const result = await adapter.execute("migrate_aws_to_azure", { instance_id: "i-0123" });
+
+    expect(result.success, String(result.error)).toBe(true);
+    expect(awsExporterMocks.exportInstance).toHaveBeenCalledWith("i-0123");
+    expect(sshExec).toHaveBeenCalledWith(
+      "192.168.86.50",
+      "root",
+      expect.stringContaining("aws s3 cp s3://vclaw-migration/vclaw-migration/i-0123/disk.vmdk"),
+      7_200_000,
+    );
+    expect(cloudUploaderMocks.uploadDiskFromSSHToAzurePageBlob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceHost: "192.168.86.50",
+        sourceUser: "root",
+        sourcePath: expect.stringContaining("/tmp/vclaw-migration/aws-azure-"),
+        destinationUrlWithSas: expect.stringContaining("https://vclawmig.blob.core.windows.net"),
+        diskSizeBytes: 1073741824,
+      }),
+    );
+    expect(azureClient.createManagedDiskFromImport).toHaveBeenCalled();
+    expect(azureClient.createVMFromManagedDisk).toHaveBeenCalled();
+    expect(result.data).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        source: expect.objectContaining({ provider: "aws", instanceId: "i-0123" }),
         target: expect.objectContaining({ provider: "azure", resourceGroup: "vclaw-migrations" }),
       }),
     );

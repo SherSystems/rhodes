@@ -125,7 +125,7 @@ const MIGRATION_DIRECTION_ROUTE_CASES: MigrationDirectionRouteCase[] = [
     idParam: "vm_id",
     executable: true,
   },
-  { direction: "aws_to_azure", vmId: "i-1234567890abcdef0", idParam: "instance_id", executable: false },
+  { direction: "aws_to_azure", vmId: "i-1234567890abcdef0", idParam: "instance_id", executable: true },
   {
     direction: "azure_to_aws",
     vmId: "/subscriptions/sub/resourceGroups/rg-demo/providers/Microsoft.Compute/virtualMachines/cache-1",
