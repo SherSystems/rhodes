@@ -1083,20 +1083,7 @@ export class DashboardServer {
     return direction.trim().toLowerCase().replaceAll("-", "_");
   }
 
-  private getPlanExecutability(direction: string): { executable: boolean; executable_reason?: string } {
-    const planOnlyDirections = new Set([
-      "azure_to_vmware",
-    ]);
-
-    if (planOnlyDirections.has(direction)) {
-      return {
-        executable: false,
-        executable_reason:
-          `Execution pipeline for ${direction} has not been implemented yet. ` +
-          "Use the plan endpoint for validation and sizing until disk transfer/import is completed.",
-      };
-    }
-
+  private getPlanExecutability(_direction: string): { executable: boolean; executable_reason?: string } {
     return { executable: true };
   }
 

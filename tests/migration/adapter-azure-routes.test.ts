@@ -21,6 +21,11 @@ const awsImporterMocks = vi.hoisted(() => ({
   importVM: vi.fn(),
 }));
 
+const vmwareImporterMocks = vi.hoisted(() => ({
+  resolveDefaults: vi.fn(),
+  importVM: vi.fn(),
+}));
+
 const cloudUploaderMocks = vi.hoisted(() => ({
   uploadDiskFromSSHToAzurePageBlob: vi.fn(async () => undefined),
 }));
@@ -62,6 +67,14 @@ vi.mock("../../src/migration/aws-importer.js", () => {
     importVM = awsImporterMocks.importVM;
   }
   return { AWSImporter };
+});
+
+vi.mock("../../src/migration/vmware-importer.js", () => {
+  class VMwareImporter {
+    resolveDefaults = vmwareImporterMocks.resolveDefaults;
+    importVM = vmwareImporterMocks.importVM;
+  }
+  return { VMwareImporter };
 });
 
 vi.mock("../../src/migration/cloud-uploader.js", () => ({
@@ -131,6 +144,8 @@ describe("MigrationAdapter Azure direction routes", () => {
     proxmoxExporterMocks.exportVM.mockReset();
     awsExporterMocks.exportInstance.mockReset();
     awsImporterMocks.importVM.mockReset();
+    vmwareImporterMocks.resolveDefaults.mockReset();
+    vmwareImporterMocks.importVM.mockReset();
     cloudUploaderMocks.uploadDiskFromSSHToAzurePageBlob.mockReset();
     blobStorageMocks.createIfNotExists.mockReset();
     blobStorageMocks.getPageBlobClient.mockReset();
@@ -285,20 +300,6 @@ describe("MigrationAdapter Azure direction routes", () => {
     expect(toolNames.has("migrate_azure_to_proxmox")).toBe(true);
     expect(toolNames.has("migrate_aws_to_azure")).toBe(true);
     expect(toolNames.has("migrate_azure_to_aws")).toBe(true);
-  });
-
-  it("surfaces explicit plan-only execution messaging for Azure execute calls", async () => {
-    const adapter = createAdapter();
-    vi.spyOn(adapter as any, "executePlanAzureToVMware").mockResolvedValue({
-      success: true,
-      data: { plan: { id: "plan-1", steps: [] } },
-    });
-
-    const result = await adapter.execute("migrate_azure_to_vmware", { vm_id: "vclaw-qa/Migration-TestVM" });
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("has not been implemented yet");
-    expect(result.error).toContain("Use the plan endpoint");
   });
 
   it("executes vmware_to_azure migration with Azure disk import path", async () => {
@@ -647,6 +648,105 @@ describe("MigrationAdapter Azure direction routes", () => {
         status: "completed",
         source: expect.objectContaining({ provider: "azure", vmId: "vclaw-qa/Migration-TestVM" }),
         target: expect.objectContaining({ provider: "aws", instanceId: "i-0abcdef1234567890" }),
+      }),
+    );
+  });
+
+  it("executes azure_to_vmware migration with snapshot export and VMware import path", async () => {
+    const vmArmId = "/subscriptions/sub-1234/resourceGroups/vclaw-qa/providers/Microsoft.Compute/virtualMachines/Migration-TestVM";
+    const diskArmId = "/subscriptions/sub-1234/resourceGroups/vclaw-disks/providers/Microsoft.Compute/disks/migration-testvm-osdisk";
+
+    const sshExec = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    const azureClient = {
+      defaultLocation: "eastus",
+      getVM: vi.fn(async () => ({
+        id: vmArmId,
+        name: "Migration-TestVM",
+        resourceGroup: "vclaw-qa",
+        location: "eastus",
+        vmSize: "Standard_B2s",
+        powerState: "running",
+        provisioningState: "Succeeded",
+        networkInterfaceIds: [],
+        osDiskId: diskArmId,
+        dataDiskIds: [],
+        tags: {},
+        osType: "Linux",
+      })),
+      listDisks: vi.fn(async () => [
+        {
+          id: diskArmId,
+          name: "migration-testvm-osdisk",
+          resourceGroup: "vclaw-disks",
+          location: "eastus",
+          sizeGB: 64,
+          diskState: "Attached",
+          encrypted: false,
+          attachedVmId: vmArmId,
+        },
+      ]),
+      createSnapshot: vi.fn(async () => ({
+        id: "/subscriptions/sub-1234/resourceGroups/vclaw-disks/providers/Microsoft.Compute/snapshots/migration-testvm-snap",
+        name: "migration-testvm-snap",
+        resourceGroup: "vclaw-disks",
+        location: "eastus",
+        sizeGB: 64,
+        sourceDiskId: diskArmId,
+        provisioningState: "Succeeded",
+        encrypted: false,
+      })),
+      grantSnapshotReadAccess: vi.fn(async () => "https://storage.example/snap.vhd?sv=mock"),
+      revokeSnapshotAccess: vi.fn(async () => undefined),
+      deleteSnapshot: vi.fn(async () => undefined),
+    } as any;
+
+    vmwareImporterMocks.resolveDefaults.mockResolvedValue({
+      folderId: "group-v3",
+      hostId: "host-99",
+      datastoreId: "datastore-42",
+      datastoreName: "datastore1",
+      networkId: "network-10",
+    });
+    vmwareImporterMocks.importVM.mockResolvedValue({
+      vmId: "vm-990",
+      hostId: "host-99",
+      datastoreName: "datastore1",
+    });
+
+    const adapter = createAdapter({
+      azureClient,
+      sshExec: sshExec as any,
+    });
+
+    const result = await adapter.execute("migrate_azure_to_vmware", { vm_id: "vclaw-qa/Migration-TestVM" });
+
+    expect(result.success, String(result.error)).toBe(true);
+    expect(azureClient.createSnapshot).toHaveBeenCalled();
+    expect(azureClient.grantSnapshotReadAccess).toHaveBeenCalled();
+    expect(sshExec).toHaveBeenCalledWith(
+      "192.168.86.50",
+      "root",
+      expect.stringContaining("curl --fail --location"),
+      7_200_000,
+    );
+    expect(vmwareImporterMocks.resolveDefaults).toHaveBeenCalled();
+    expect(vmwareImporterMocks.importVM).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ name: "Migration-TestVM" }),
+        vmdkPath: expect.stringContaining("/tmp/vclaw-migration/azure-vmware-"),
+        esxiHost: "192.168.86.46",
+      }),
+      "192.168.86.50",
+      "root",
+    );
+    expect(azureClient.revokeSnapshotAccess).toHaveBeenCalled();
+    expect(azureClient.deleteSnapshot).toHaveBeenCalled();
+    expect(result.data).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        source: expect.objectContaining({ provider: "azure", vmId: "vclaw-qa/Migration-TestVM" }),
+        target: expect.objectContaining({ provider: "vmware", vmId: "vm-990" }),
       }),
     );
   });

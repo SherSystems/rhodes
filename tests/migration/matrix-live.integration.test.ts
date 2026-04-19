@@ -29,9 +29,7 @@ const DIRECTION_CASES: DirectionCase[] = [
   { direction: "azure_to_aws", source: "azure" },
 ];
 
-const PLAN_ONLY_DIRECTIONS = new Set([
-  "azure_to_vmware",
-]);
+const PLAN_ONLY_DIRECTIONS = new Set<string>();
 
 function getSourceId(source: DirectionCase["source"]): string | number {
   if (source === "vmware") return process.env.VMWARE_TEST_VM_ID ?? "vm-54";
@@ -74,32 +72,6 @@ describeLive("Live migration matrix (env-gated)", () => {
           expect(typeof result.json.executable_reason).toBe("string");
         }
       }
-    },
-    180_000,
-  );
-
-  it.each([
-    "azure_to_vmware",
-  ])(
-    "returns explicit execute messaging for current Azure-involved direction %s",
-    async (direction) => {
-      const source = direction.startsWith("aws_")
-        ? "aws"
-        : direction.startsWith("proxmox_")
-          ? "proxmox"
-          : direction.startsWith("vmware_")
-            ? "vmware"
-            : "azure";
-      const vm_id = getSourceId(source as DirectionCase["source"]);
-      const result = await postJson("/api/migration/execute", { direction, vm_id });
-      const error = typeof result.json.error === "string" ? result.json.error : "";
-
-      // Azure execution directions are currently scaffolded or blocked by missing source inventory.
-      const hasExplicitAzureScaffold = error.includes("Execution pipeline for") && error.includes("Use the plan endpoint");
-      const hasMissingSourceSignal = error.includes("could not be found") || error.includes("Invalid id");
-
-      expect(result.status).toBe(400);
-      expect(hasExplicitAzureScaffold || hasMissingSourceSignal).toBe(true);
     },
     180_000,
   );

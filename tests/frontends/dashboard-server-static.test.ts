@@ -116,7 +116,7 @@ const MIGRATION_DIRECTION_ROUTE_CASES: MigrationDirectionRouteCase[] = [
     direction: "azure_to_vmware",
     vmId: "/subscriptions/sub/resourceGroups/rg-demo/providers/Microsoft.Compute/virtualMachines/web-1",
     idParam: "vm_id",
-    executable: false,
+    executable: true,
   },
   { direction: "proxmox_to_azure", vmId: 114, idParam: "vm_id", executable: true },
   {
