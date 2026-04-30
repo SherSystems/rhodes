@@ -2856,20 +2856,6 @@ export class MigrationAdapter implements InfraAdapter {
     }
   }
 
-  private async executeAzureExecutionScaffold(
-    direction: string,
-    planBuilder: () => Promise<ToolCallResult>,
-  ): Promise<ToolCallResult> {
-    const planResult = await planBuilder();
-    if (!planResult.success) return planResult;
-    return {
-      success: false,
-      error:
-        `Execution pipeline for ${direction} has not been implemented yet. ` +
-        "Use the plan endpoint for validation and sizing until disk transfer/import is completed.",
-    };
-  }
-
   private buildAzureTargetAnalysis(vmConfig: {
     name?: string;
     cpuCount: number;

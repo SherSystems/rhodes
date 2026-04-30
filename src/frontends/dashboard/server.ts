@@ -57,6 +57,18 @@ interface SSEClient {
   connectedAt: number;
 }
 
+// ── Migration Run Tracking ─────────────────────────────────
+
+interface MigrationActiveRun {
+  id: string;
+  direction: string;
+  vmId: unknown;
+  startedAt: string;
+  status: "pending" | "running";
+  stage: string;
+  progressPct: number;
+}
+
 // ── Dashboard Server ───────────────────────────────────────
 
 export class DashboardServer {
@@ -70,6 +82,10 @@ export class DashboardServer {
   migrationAdapter?: MigrationAdapter;
   topologyStore?: TopologyStore;
   private migrationHistory: MigrationPlan[] = [];
+  // Active in-flight migrations keyed by run id (server-assigned). The frontend
+  // may also pass a client-side `local-*` id which we map to the server id once
+  // the underlying adapter returns a plan with its own id.
+  private migrationActive: Map<string, MigrationActiveRun> = new Map();
 
   constructor(
     private readonly port: number,
@@ -261,6 +277,8 @@ export class DashboardServer {
           // Dynamic topology routes: /api/topology/apps/:id, /api/topology/apps/:id/members, etc.
           if (path.startsWith("/api/topology/")) {
             this.handleTopologyDynamic(req, res, path);
+          } else if (path.startsWith("/api/migration/status/")) {
+            this.handleMigrationStatus(res, path);
           } else if (path.startsWith("/api/incidents/") && path.endsWith("/timeline")) {
             const incidentId = path.replace("/api/incidents/", "").replace("/timeline", "");
             this.handleIncidentTimeline(res, incidentId);
@@ -1033,33 +1051,73 @@ export class DashboardServer {
         return;
       }
 
+      // Track active run so /api/migration/status/:id can report progress
+      // even if the client refreshes mid-flight. The id is server-assigned and
+      // the frontend learns it via the response body once execute resolves.
+      const activeId = this.generateMigrationRunId();
+      const startedAt = new Date().toISOString();
+      this.migrationActive.set(activeId, {
+        id: activeId,
+        direction,
+        vmId,
+        startedAt,
+        status: "running",
+        stage: "starting",
+        progressPct: 0,
+      });
+
       // Emit migration_started event
       this.broadcast({
         type: AgentEventType.MigrationStarted,
         timestamp: new Date().toISOString(),
-        data: { direction, vm_id: vmId },
+        data: { direction, vm_id: vmId, migration_id: activeId },
       });
 
-      const result = await this.migrationAdapter.execute(mapping.tool, { [mapping.idParam]: vmId });
+      let result;
+      try {
+        result = await this.migrationAdapter.execute(mapping.tool, { [mapping.idParam]: vmId });
+      } finally {
+        this.migrationActive.delete(activeId);
+      }
 
       if (!result.success) {
+        // Persist a synthetic failed plan so /api/migration/status/:id can
+        // report the failure after refresh.
+        const failedPlan: MigrationPlan = {
+          id: activeId,
+          source: { provider: "vmware", vmId: String(vmId), vmName: "", host: "" },
+          target: { provider: "proxmox", node: "", host: "", storage: "" },
+          vmConfig: { name: "", cpuCount: 0, coresPerSocket: 0, memoryMiB: 0, guestOS: "", disks: [], nics: [], firmware: "bios" },
+          status: "failed",
+          steps: [],
+          startedAt,
+          completedAt: new Date().toISOString(),
+          error: result.error,
+        };
+        this.migrationHistory.unshift(failedPlan);
+        if (this.migrationHistory.length > 50) this.migrationHistory.pop();
+
         this.broadcast({
           type: AgentEventType.MigrationFailed,
           timestamp: new Date().toISOString(),
-          data: { direction, vm_id: vmId, error: result.error },
+          data: { direction, vm_id: vmId, migration_id: activeId, error: result.error },
         });
-        this.json(res, { error: result.error }, 400);
+        this.json(res, { error: result.error, migration_id: activeId }, 400);
         return;
       }
 
       const plan = result.data as MigrationPlan;
+      // Some adapters return their own plan.id; if missing, stamp our active id.
+      if (!plan.id) {
+        plan.id = activeId;
+      }
       this.migrationHistory.unshift(plan);
       if (this.migrationHistory.length > 50) this.migrationHistory.pop();
 
       this.broadcast({
         type: AgentEventType.MigrationCompleted,
         timestamp: new Date().toISOString(),
-        data: { direction, vm_id: vmId, status: plan.status },
+        data: { direction, vm_id: vmId, migration_id: plan.id, status: plan.status },
       });
 
       this.json(res, plan);
@@ -1076,6 +1134,69 @@ export class DashboardServer {
 
   private handleMigrationHistory(res: ServerResponse): void {
     this.json(res, { migrations: this.migrationHistory });
+  }
+
+  /**
+   * GET /api/migration/status/:id — used by the dashboard to rehydrate
+   * progress for an in-flight or recently-completed migration after a refresh.
+   *
+   * Lookup order:
+   *   1. Active in-flight runs (server-assigned id)
+   *   2. migrationHistory (terminal state)
+   * Returns 404 JSON when neither matches.
+   */
+  private handleMigrationStatus(res: ServerResponse, path: string): void {
+    const rawId = path.replace("/api/migration/status/", "");
+    let migrationId: string;
+    try {
+      migrationId = decodeURIComponent(rawId);
+    } catch {
+      this.json(res, { error: "migration not found" }, 404);
+      return;
+    }
+
+    if (!migrationId) {
+      this.json(res, { error: "migration not found" }, 404);
+      return;
+    }
+
+    const active = this.migrationActive.get(migrationId);
+    if (active) {
+      this.json(res, {
+        migrationId: active.id,
+        status: active.status,
+        stage: active.stage,
+        progressPct: active.progressPct,
+        startedAt: active.startedAt,
+        direction: active.direction,
+        terminal: false,
+      });
+      return;
+    }
+
+    const plan = this.migrationHistory.find((p) => p.id === migrationId);
+    if (plan) {
+      const progressPct = plan.status === "completed" ? 100 : plan.status === "failed" ? 0 : 50;
+      const lastStep = plan.steps[plan.steps.length - 1];
+      this.json(res, {
+        migrationId: plan.id,
+        status: plan.status,
+        stage: lastStep?.name ?? plan.status,
+        progressPct,
+        startedAt: plan.startedAt,
+        completedAt: plan.completedAt,
+        error: plan.error,
+        terminal: plan.status === "completed" || plan.status === "failed",
+        plan,
+      });
+      return;
+    }
+
+    this.json(res, { error: "migration not found" }, 404);
+  }
+
+  private generateMigrationRunId(): string {
+    return `mig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
   private normalizeMigrationDirection(direction: unknown): string {
