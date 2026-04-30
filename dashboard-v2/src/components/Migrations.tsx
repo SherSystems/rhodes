@@ -5,8 +5,10 @@ import {
   planMigration,
   executeMigration,
   fetchMigrationHistory,
+  fetchMigrationStatus,
 } from "../api/client";
 import type { MigrationVM, MigrationPlan, MigrationDirection, MigrationLiveRun } from "../types";
+import { buildMigrationStatusEvent } from "../lib/migration-status";
 
 type MigrationProvider = "vmware" | "proxmox" | "aws" | "azure";
 type RouteExecutionSupport = "full" | "plan_only";
@@ -79,6 +81,33 @@ const LIVE_STAGE_LABELS: Record<string, string> = {
   launch_instance: "Launching EC2",
 };
 
+const ACTIVE_MIGRATION_RUNS_STORAGE_KEY = "vclaw.activeMigrationRuns";
+
+function readStoredActiveMigrationRuns(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_MIGRATION_RUNS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredActiveMigrationRuns(runIds: string[]): void {
+  if (typeof window === "undefined") return;
+  if (runIds.length === 0) {
+    window.localStorage.removeItem(ACTIVE_MIGRATION_RUNS_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(
+    ACTIVE_MIGRATION_RUNS_STORAGE_KEY,
+    JSON.stringify(runIds.slice(0, 50)),
+  );
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
@@ -150,6 +179,7 @@ export default function Migrations() {
   const beginMigrationRun = useStore((s) => s.beginMigrationRun);
   const registerMigrationRun = useStore((s) => s.registerMigrationRun);
   const markMigrationRunFailed = useStore((s) => s.markMigrationRunFailed);
+  const applyMigrationEvent = useStore((s) => s.applyMigrationEvent);
   const multiCluster = useStore((s) => s.multiCluster);
 
   const [routeId, setRouteId] = useState<string>("vmware_to_proxmox");
@@ -230,6 +260,32 @@ export default function Migrations() {
       .catch(() => {});
   }, [setMigrationHistory]);
 
+  // Rehydrate active migration progress after refresh when backend status is available.
+  useEffect(() => {
+    let cancelled = false;
+    const runIds = readStoredActiveMigrationRuns();
+    if (runIds.length === 0) return;
+
+    (async () => {
+      for (const runId of runIds) {
+        try {
+          const status = await fetchMigrationStatus(runId);
+          if (cancelled) return;
+
+          const migrationEvent = buildMigrationStatusEvent(status, runId);
+          if (!migrationEvent) continue;
+          applyMigrationEvent(migrationEvent.type, migrationEvent.data, new Date().toISOString());
+        } catch {
+          // Status endpoint may be unavailable; live SSE updates continue to work.
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyMigrationEvent]);
+
   // Clock tick for elapsed/eta rendering
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 1000);
@@ -291,6 +347,13 @@ export default function Migrations() {
     () => migrationRunOrder.map((runId) => migrationRuns[runId]).filter((run): run is MigrationLiveRun => run != null),
     [migrationRunOrder, migrationRuns],
   );
+
+  useEffect(() => {
+    const activeRunIds = displayedRuns
+      .filter((run) => run.status === "running")
+      .map((run) => run.id);
+    writeStoredActiveMigrationRuns(activeRunIds);
+  }, [displayedRuns]);
 
   return (
     <>
