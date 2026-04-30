@@ -47,6 +47,7 @@ interface InstanceSpec {
 // ---- Instance catalog ----
 
 const INSTANCE_CATALOG: InstanceSpec[] = [
+  { instanceType: 't3.nano',     family: 't3', vCPU: 2,  memoryMiB: 512,     hourlyRate: 0.0052 },
   { instanceType: 't3.micro',    family: 't3', vCPU: 2,  memoryMiB: 1024,    hourlyRate: 0.0104 },
   { instanceType: 't3.small',    family: 't3', vCPU: 2,  memoryMiB: 2048,    hourlyRate: 0.0208 },
   { instanceType: 't3.medium',   family: 't3', vCPU: 2,  memoryMiB: 4096,    hourlyRate: 0.0416 },

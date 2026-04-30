@@ -66,6 +66,8 @@ export interface VMInfo {
   ip_address?: string;
   os?: string;
   uptime_s?: number;
+  /** Cloud-provider sizing identifier when applicable (e.g. AWS instance_type, Azure vmSize). */
+  instance_type?: string;
 }
 
 export interface ContainerInfo {

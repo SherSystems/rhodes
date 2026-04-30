@@ -305,6 +305,7 @@ export class AWSAdapter implements InfraAdapter {
           uptime_s: inst.state === "running" && inst.launchTime
             ? Math.floor((Date.now() - new Date(inst.launchTime).getTime()) / 1000)
             : 0,
+          instance_type: inst.instanceType,
         };
       });
 

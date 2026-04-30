@@ -332,6 +332,7 @@ export class AzureAdapter implements InfraAdapter {
         disk_gb: disksByVmId.get(vm.id) ?? 0,
         ip_address: vm.publicIp ?? vm.privateIp,
         os: vm.osType ?? vm.vmSize,
+        instance_type: vm.vmSize,
       };
     });
 

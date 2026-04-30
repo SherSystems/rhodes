@@ -54,24 +54,27 @@ export function isOnPremProviderType(type: string): boolean {
  */
 export function vmHourlyRate(
   providerType: string,
-  vm: Pick<VMInfo, "cpu_cores" | "ram_mb" | "os">,
+  vm: Pick<VMInfo, "cpu_cores" | "ram_mb" | "os" | "instance_type">,
 ): number {
   const ptype = providerType.toLowerCase();
 
   if (ptype === "aws") {
-    // AWS adapter encodes the instance type in `os` when no platform string
-    // is set. If `os` looks like a known instance type, prefer that.
+    // Prefer the explicit instance_type field. Fall back to the legacy
+    // os-encoded form for backward compat, then a shape-based heuristic.
+    if (vm.instance_type) {
+      return awsHourlyRate(vm.instance_type);
+    }
     const candidate = (vm.os ?? "").trim();
     if (candidate && /^[a-z0-9]+\.[a-z0-9]+$/i.test(candidate)) {
       return awsHourlyRate(candidate);
     }
-    // Fallback: shape-based heuristic from cpu+ram.
     return heuristicRateFromShape(vm.cpu_cores, vm.ram_mb);
   }
 
   if (ptype === "azure") {
-    // Azure adapter sets `os` to osType (Linux/Windows) when known,
-    // falling back to vmSize. Try both forms.
+    if (vm.instance_type && AZURE_HOURLY_RATES[vm.instance_type] !== undefined) {
+      return azureHourlyRate(vm.instance_type);
+    }
     const candidate = (vm.os ?? "").trim();
     if (candidate && AZURE_HOURLY_RATES[candidate] !== undefined) {
       return azureHourlyRate(candidate);
