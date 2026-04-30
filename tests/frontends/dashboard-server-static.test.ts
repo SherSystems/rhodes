@@ -350,4 +350,165 @@ describe("Dashboard server static routing", () => {
     expect(res.getStatusCode()).toBe(400);
     expect(String(res.getBody())).toContain("Unsupported migration direction");
   });
+
+  it("returns 404 JSON for unknown migration status id", () => {
+    const server = makeServer();
+    const res = makeRes();
+
+    server.handleRequest(makeReq("/api/migration/status/no-such-id"), res);
+
+    expect(res.getStatusCode()).toBe(404);
+    expect(res.getHeader("content-type")).toContain("application/json");
+    const payload = JSON.parse(String(res.getBody()));
+    expect(payload.error).toBe("migration not found");
+  });
+
+  it("returns 404 JSON when migration status path has no id", () => {
+    const server = makeServer();
+    const res = makeRes();
+
+    server.handleRequest(makeReq("/api/migration/status/"), res);
+
+    expect(res.getStatusCode()).toBe(404);
+    expect(res.getHeader("content-type")).toContain("application/json");
+    const payload = JSON.parse(String(res.getBody()));
+    expect(payload.error).toBe("migration not found");
+  });
+
+  it("returns terminal status from migration history with frontend-consumable shape", () => {
+    const server = makeServer();
+    const plan = makeMigrationPlan("mig-history-1") as any;
+    plan.status = "completed";
+    plan.startedAt = "2026-04-30T12:00:00.000Z";
+    plan.completedAt = "2026-04-30T12:05:00.000Z";
+    plan.steps = [
+      { name: "export_config", status: "completed" },
+      { name: "import_vm", status: "completed" },
+    ];
+    server.migrationHistory.unshift(plan);
+    const res = makeRes();
+
+    server.handleRequest(makeReq("/api/migration/status/mig-history-1"), res);
+
+    expect(res.getStatusCode()).toBe(200);
+    expect(res.getHeader("content-type")).toContain("application/json");
+    const payload = JSON.parse(String(res.getBody()));
+    expect(payload.migrationId).toBe("mig-history-1");
+    expect(payload.status).toBe("completed");
+    expect(payload.progressPct).toBe(100);
+    expect(payload.terminal).toBe(true);
+    expect(payload.stage).toBe("import_vm");
+    expect(payload.plan).toBeDefined();
+  });
+
+  it("returns failed status with error from migration history", () => {
+    const server = makeServer();
+    const plan = makeMigrationPlan("mig-failed-1") as any;
+    plan.status = "failed";
+    plan.error = "disk conversion failed";
+    server.migrationHistory.unshift(plan);
+    const res = makeRes();
+
+    server.handleRequest(makeReq("/api/migration/status/mig-failed-1"), res);
+
+    expect(res.getStatusCode()).toBe(200);
+    const payload = JSON.parse(String(res.getBody()));
+    expect(payload.status).toBe("failed");
+    expect(payload.error).toBe("disk conversion failed");
+    expect(payload.terminal).toBe(true);
+  });
+
+  it("returns active in-flight migration before history", () => {
+    const server = makeServer();
+    server.migrationActive.set("mig-active-1", {
+      id: "mig-active-1",
+      direction: "vmware_to_proxmox",
+      vmId: "vm-100",
+      startedAt: "2026-04-30T12:00:00.000Z",
+      status: "running",
+      stage: "exporting",
+      progressPct: 25,
+    });
+    const res = makeRes();
+
+    server.handleRequest(makeReq("/api/migration/status/mig-active-1"), res);
+
+    expect(res.getStatusCode()).toBe(200);
+    const payload = JSON.parse(String(res.getBody()));
+    expect(payload.migrationId).toBe("mig-active-1");
+    expect(payload.status).toBe("running");
+    expect(payload.terminal).toBe(false);
+    expect(payload.progressPct).toBe(25);
+    expect(payload.stage).toBe("exporting");
+  });
+
+  it("decodes URL-encoded migration ids", () => {
+    const server = makeServer();
+    const plan = makeMigrationPlan("mig-with space") as any;
+    plan.status = "completed";
+    server.migrationHistory.unshift(plan);
+    const res = makeRes();
+
+    server.handleRequest(makeReq("/api/migration/status/mig-with%20space"), res);
+
+    expect(res.getStatusCode()).toBe(200);
+    const payload = JSON.parse(String(res.getBody()));
+    expect(payload.migrationId).toBe("mig-with space");
+  });
+
+  it("execute records terminal plan in history reachable via status endpoint", async () => {
+    const server = makeServer();
+    const plan = makeMigrationPlan("mig-exec-success") as any;
+    plan.status = "completed";
+    const execute = vi.fn().mockResolvedValue({ success: true, data: plan });
+    server.migrationAdapter = { execute } as any;
+
+    const req = makeJsonReq("/api/migration/execute", {
+      direction: "vmware_to_proxmox",
+      vm_id: "vm-100",
+    });
+    const res = makeRes();
+
+    const pending = server.handleMigrationExecute(req, res);
+    req.flush();
+    await pending;
+
+    expect(res.getStatusCode()).toBe(200);
+
+    const statusRes = makeRes();
+    server.handleRequest(makeReq("/api/migration/status/mig-exec-success"), statusRes);
+    expect(statusRes.getStatusCode()).toBe(200);
+    const statusPayload = JSON.parse(String(statusRes.getBody()));
+    expect(statusPayload.status).toBe("completed");
+    expect(statusPayload.terminal).toBe(true);
+  });
+
+  it("execute records failed migration in history reachable via status endpoint", async () => {
+    const server = makeServer();
+    const execute = vi.fn().mockResolvedValue({ success: false, error: "boom" });
+    server.migrationAdapter = { execute } as any;
+
+    const req = makeJsonReq("/api/migration/execute", {
+      direction: "vmware_to_proxmox",
+      vm_id: "vm-200",
+    });
+    const res = makeRes();
+
+    const pending = server.handleMigrationExecute(req, res);
+    req.flush();
+    await pending;
+
+    expect(res.getStatusCode()).toBe(400);
+    const errPayload = JSON.parse(String(res.getBody()));
+    expect(errPayload.error).toBe("boom");
+    expect(typeof errPayload.migration_id).toBe("string");
+
+    const statusRes = makeRes();
+    server.handleRequest(makeReq(`/api/migration/status/${errPayload.migration_id}`), statusRes);
+    expect(statusRes.getStatusCode()).toBe(200);
+    const statusPayload = JSON.parse(String(statusRes.getBody()));
+    expect(statusPayload.status).toBe("failed");
+    expect(statusPayload.error).toBe("boom");
+    expect(statusPayload.terminal).toBe(true);
+  });
 });
