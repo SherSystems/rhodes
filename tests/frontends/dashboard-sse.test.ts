@@ -3,8 +3,8 @@ import {
   safeParseSseData,
   parseAgentSseMessage,
   applySseEvent,
-} from "../../dashboard/src/hooks/useSSE";
-import type { AgentEvent } from "../../dashboard/src/types";
+} from "../../dashboard-v2/src/hooks/useSSE";
+import type { AgentEvent } from "../../dashboard-v2/src/types";
 
 function makeStoreStub() {
   return {

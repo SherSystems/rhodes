@@ -31,7 +31,7 @@ Primary runtime modes:
 - `src/monitoring/`: health metric collection and anomaly detection
 - `src/chaos/`: chaos simulation and execution
 - `src/frontends/`: CLI, Telegram, MCP, backend dashboard server
-- `dashboard/`: React + Vite dashboard frontend
+- `dashboard-v2/`: React + Vite dashboard frontend
 - `policies/default.yaml`: default governance policy
 - `tests/`: vitest test suite
 - `data/`: runtime persistence for audit and healing state
@@ -39,7 +39,7 @@ Primary runtime modes:
 ## Working Rules For Agents
 
 - Read the relevant module before editing it. This repo has shared concepts across agent, governance, healing, and dashboard code.
-- Prefer editing `src/` and `dashboard/src/`. Do not hand-edit `dist/`; it is build output.
+- Prefer editing `src/` and `dashboard-v2/src/`. Do not hand-edit `dist/`; it is build output.
 - Keep governance behavior explicit. Any new action path should preserve tiering, approval flow, audit logging, and circuit-breaker behavior.
 - Assume provider access may be real. Avoid destructive defaults and do not weaken guardrails casually.
 - Preserve existing event emissions when changing execution or healing flows. The dashboard depends on them.
@@ -67,8 +67,8 @@ Backend:
 
 Dashboard frontend:
 
-- `cd dashboard && npm run dev`
-- `cd dashboard && npm run build`
+- `cd dashboard-v2 && npm run dev`
+- `cd dashboard-v2 && npm run build`
 
 ## Environment
 
@@ -87,7 +87,7 @@ The backend supports both `anthropic` and `openai` providers via `src/agent/llm.
 
 ## Dashboard Architecture
 
-The dashboard frontend (`dashboard/`) is a React 19 + Vite 6 app using Zustand for state management. Key patterns:
+The dashboard frontend (`dashboard-v2/`) is a React 19 + Vite 6 app using Zustand for state management. Key patterns:
 
 - **SSE (Server-Sent Events)** for real-time updates. The backend pushes events (`health_check`, `incident`, `healing`, `chaos`, `task`, `governance`) and the frontend consumes them via `EventSource` in `src/store.ts`.
 - **Zustand store** (`src/store.ts`) is the single source of truth. Components subscribe to slices of state, not props.
@@ -107,7 +107,7 @@ vClaw uses a provider abstraction pattern:
 
 ## Repo-Specific Notes
 
-- The backend dashboard server serves `dashboard/dist` if it exists; otherwise it falls back to an inline HTML template.
+- The backend dashboard server serves `dashboard-v2/dist` if it exists; otherwise it falls back to an inline HTML template.
 - The default policy accepts `approve_fix` in YAML and normalizes it to `approve_risky` in `src/governance/policy.ts`.
 - Test suite: `npm test` runs vitest across `tests/`.
 - `ToolRegistry.getClusterState()` returns the first connected adapter's cluster state; `getMultiClusterState()` aggregates all providers.

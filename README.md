@@ -122,7 +122,7 @@ AI_MODEL=claude-sonnet-4-20250514
 npm run dev
 
 # Web dashboard
-npm run dashboard    # http://localhost:3000
+npm run dev:dashboard    # http://localhost:3000
 
 # As an MCP server (Claude Desktop integration)
 npm run dev:mcp

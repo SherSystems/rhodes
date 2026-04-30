@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import * as ReactRuntime from "../../dashboard/node_modules/react/index.js";
+import * as ReactRuntime from "../../dashboard-v2/node_modules/react/index.js";
 
 const hookHarness = vi.hoisted(() => {
   const store = {
@@ -34,7 +34,7 @@ const hookHarness = vi.hoisted(() => {
   return { store, useStoreMock, cleanups };
 });
 
-vi.mock("../../dashboard/src/store", () => ({
+vi.mock("../../dashboard-v2/src/store", () => ({
   useStore: hookHarness.useStoreMock,
 }));
 
@@ -123,7 +123,7 @@ describe("useSSE hook", () => {
   });
 
   it("reconnects after SSE errors and continues processing events", async () => {
-    const { useSSE } = await import("../../dashboard/src/hooks/useSSE");
+    const { useSSE } = await import("../../dashboard-v2/src/hooks/useSSE");
     useSSE();
 
     expect(MockEventSource.instances).toHaveLength(1);
@@ -180,7 +180,7 @@ describe("useSSE hook", () => {
   });
 
   it("closes the active EventSource on cleanup", async () => {
-    const { useSSE } = await import("../../dashboard/src/hooks/useSSE");
+    const { useSSE } = await import("../../dashboard-v2/src/hooks/useSSE");
     useSSE();
 
     const first = MockEventSource.instances[0];

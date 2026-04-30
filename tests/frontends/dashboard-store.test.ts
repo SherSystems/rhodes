@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { useStore } from "../../dashboard/src/store";
-import type { ClusterState, HealthSummary, Incident, Plan } from "../../dashboard/src/types";
+import { useStore } from "../../dashboard-v2/src/store";
+import type { ClusterState, HealthSummary, Incident, Plan } from "../../dashboard-v2/src/types";
 
 const initialState = useStore.getState();
 
