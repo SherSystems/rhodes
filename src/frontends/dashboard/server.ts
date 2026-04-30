@@ -26,6 +26,12 @@ import { linearRegression, predictTimeToThreshold } from "../../monitoring/anoma
 import type { DataPoint as AnomalyDataPoint } from "../../monitoring/anomaly.js";
 import { metricStore } from "../../monitoring/metric-store.js";
 import type { RunTelemetryCollector } from "../../monitoring/run-telemetry.js";
+import {
+  buildSummary as buildCostSummary,
+  buildTimeseries as buildCostTimeseries,
+  buildTopResources as buildCostTopResources,
+} from "./cost-estimator.js";
+import type { CostComparisonMode } from "./cost-estimator.js";
 
 const STATIC_MIME: Record<string, string> = {
   ".js": "application/javascript",
@@ -247,6 +253,15 @@ export class DashboardServer {
             res.end(JSON.stringify({ error: "Method not allowed" }));
           }
           break;
+        case "/api/costs/summary":
+          this.handleCostSummary(res, url);
+          break;
+        case "/api/costs/timeseries":
+          this.handleCostTimeseries(res, url);
+          break;
+        case "/api/costs/top-resources":
+          this.handleCostTopResources(res, url);
+          break;
         case "/api/topology/apps":
           if (req.method === "POST") {
             this.handleTopologyCreateApp(req, res);
@@ -385,6 +400,54 @@ export class DashboardServer {
       this.json(res, state);
     } catch (err) {
       this.json(res, { error: "Failed to fetch multi-cluster state" }, 500);
+    }
+  }
+
+  // ── Cost endpoints ──────────────────────────────────────
+  // Cost data is derived from current provider state via static
+  // per-instance-type rate maps (see cost-rates.ts). These are
+  // defensible ballpark estimates, not billing-grade numbers.
+
+  private parseComparison(url: URL): CostComparisonMode {
+    const raw = (url.searchParams.get("comparison") ?? "").toLowerCase();
+    return raw === "hybrid" ? "hybrid" : "cloud";
+  }
+
+  private async handleCostSummary(res: ServerResponse, url: URL): Promise<void> {
+    try {
+      const comparison = this.parseComparison(url);
+      const state = await this.toolRegistry.getMultiClusterState();
+      const providers = buildCostSummary(state, comparison);
+      this.json(res, { providers, comparison });
+    } catch (err) {
+      console.error("[DashboardServer] handleCostSummary error:", err);
+      this.json(res, { error: "Failed to compute cost summary" }, 500);
+    }
+  }
+
+  private async handleCostTimeseries(res: ServerResponse, url: URL): Promise<void> {
+    try {
+      const comparison = this.parseComparison(url);
+      const state = await this.toolRegistry.getMultiClusterState();
+      const points = buildCostTimeseries(state, comparison, 30);
+      this.json(res, { points, comparison, window: "30d" });
+    } catch (err) {
+      console.error("[DashboardServer] handleCostTimeseries error:", err);
+      this.json(res, { error: "Failed to compute cost timeseries" }, 500);
+    }
+  }
+
+  private async handleCostTopResources(res: ServerResponse, url: URL): Promise<void> {
+    try {
+      const comparison = this.parseComparison(url);
+      const limitParam = Number.parseInt(url.searchParams.get("limit") ?? "10", 10);
+      const limit = Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 10;
+      const state = await this.toolRegistry.getMultiClusterState();
+      const resources = buildCostTopResources(state, comparison, limit);
+      this.json(res, { resources, comparison, limit });
+    } catch (err) {
+      console.error("[DashboardServer] handleCostTopResources error:", err);
+      this.json(res, { error: "Failed to compute cost top resources" }, 500);
     }
   }
 
