@@ -26,6 +26,9 @@ import {
   buildEntityKey,
   type SuppressionInfo,
 } from "./rule-state.js";
+import { ProbeScheduler } from "./probes/scheduler.js";
+import type { ProbeDef } from "./probes/schema.js";
+import type { ProberOverrides } from "./probes/probers.js";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -34,11 +37,21 @@ export interface AutopilotConfig {
   pollIntervalMs: number;
   /** Whether the daemon is enabled. Default: true */
   enabled: boolean;
+  /** Service-health probes — when non-empty, the probe scheduler is
+   *  started alongside the daemon. */
+  probes?: ProbeDef[];
+  /** Whether the probe scheduler runs at all. Default: true (the
+   *  daemon's own `enabled` still gates startup). */
+  probesEnabled?: boolean;
+  /** Test hook — kind→runner overrides for the probe scheduler so
+   *  unit tests can inject mock runners with no real sockets. */
+  probeRunnerOverrides?: ProberOverrides;
 }
 
 const DEFAULT_CONFIG: AutopilotConfig = {
   pollIntervalMs: 30_000,
   enabled: true,
+  probesEnabled: true,
 };
 
 // ── Restart Tracking ────────────────────────────────────────
@@ -63,6 +76,7 @@ export class AutopilotDaemon {
   private healthChecks: HealthCheck[] = [];
   private restartRecords: Map<string | number, RestartRecord> = new Map();
   private ruleState = new RuleStateTracker();
+  private probeScheduler: ProbeScheduler | null = null;
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -78,6 +92,25 @@ export class AutopilotDaemon {
     this.eventBus = eventBus;
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.rules = DEFAULT_RULES.map((r) => ({ ...r }));
+
+    // Probe scheduler: created eagerly so tests can inspect it before
+    // start() is called. The scheduler isn't running yet — start()
+    // calls scheduler.start() under the same gate as the poll timer.
+    if (this.config.probesEnabled !== false) {
+      // The scheduler accepts either a real ToolRegistry (provider
+      // checks) or null (tests, probes-only mode).
+      const registryHasAdapters =
+        typeof (toolRegistry as { getHypervisorAdapters?: unknown })
+          .getHypervisorAdapters === "function";
+      this.probeScheduler = new ProbeScheduler(
+        this.eventBus,
+        registryHasAdapters ? toolRegistry : null,
+        {
+          probes: this.config.probes ?? [],
+          runnerOverrides: this.config.probeRunnerOverrides,
+        },
+      );
+    }
   }
 
   // ── Public API ────────────────────────────────────────────
@@ -96,6 +129,10 @@ export class AutopilotDaemon {
     console.log(
       `[autopilot] Starting daemon with ${this.config.pollIntervalMs}ms poll interval.`,
     );
+
+    // Bring the probe scheduler up alongside the daemon — independent
+    // timers per probe, so a slow probe never starves another.
+    if (this.probeScheduler) this.probeScheduler.start();
 
     // Run first poll immediately
     void this.poll();
@@ -117,7 +154,30 @@ export class AutopilotDaemon {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    if (this.probeScheduler) this.probeScheduler.stop();
     console.log("[autopilot] Daemon stopped.");
+  }
+
+  /**
+   * Snapshot of probe state, exposed for the dashboard.
+   */
+  getProbeStateSnapshot() {
+    return this.probeScheduler?.getProbeStateSnapshot() ?? [];
+  }
+
+  /**
+   * Snapshot of provider-adapter health, exposed for the dashboard.
+   */
+  getProviderHealthSnapshot() {
+    return this.probeScheduler?.getProviderHealthSnapshot() ?? [];
+  }
+
+  /**
+   * The probe scheduler instance — exposed for tests that want to drive
+   * one-off probe runs. Returns null when probes are disabled.
+   */
+  getProbeScheduler(): ProbeScheduler | null {
+    return this.probeScheduler;
   }
 
   /**
@@ -174,12 +234,27 @@ export class AutopilotDaemon {
       // Run health checks
       this.runHealthChecks(currentState, now);
 
+      // Provider-adapter reachability — checked on the daemon's poll
+      // cadence rather than on its own timer, since they share the
+      // same natural rate (a poll proves a connection works).
+      if (this.probeScheduler) {
+        try {
+          this.probeScheduler.pollProviders();
+        } catch (err) {
+          // Provider polling must never break the daemon poll loop.
+          console.error(
+            `[autopilot] Provider health poll failed: ${(err as Error).message}`,
+          );
+        }
+      }
+
       // Evaluate rules
       const matches = evaluateRules(
         this.rules,
         currentState,
         this.previousState,
         now,
+        this.probeScheduler ?? undefined,
       );
 
       // Emit a single per-poll evaluation event for observability — easier
@@ -420,10 +495,152 @@ export class AutopilotDaemon {
       return;
     }
 
+    if (action === "restart_vm") {
+      await this.handleServiceUnreachableRestart(match, now);
+      return;
+    }
+
     // Unknown action — log it
     console.warn(
       `[autopilot] Unknown rule action "${action}" for rule "${rule.id}".`,
     );
+  }
+
+  /**
+   * Service-unreachable remediation — the VM is RUNNING but its service
+   * has stopped responding. We try a power-cycle (stop_vm followed by
+   * start_vm) routed through governance. Both calls are tier=risky_write
+   * because we're operating on a live VM. Per-(probe, target) cooldown
+   * is enforced by the ProbeScheduler so a flapping VM isn't power-
+   * cycled in a loop.
+   */
+  private async handleServiceUnreachableRestart(
+    match: RuleMatch,
+    now: Date,
+  ): Promise<void> {
+    const probeId = match.params.probe_id as string | undefined;
+    const vmid = match.params.vmid as string | number | undefined;
+    const vmName = (match.params.vm_name as string | undefined) ?? `vm/${vmid}`;
+    const node = match.params.node as string | undefined;
+
+    if (probeId && this.probeScheduler) {
+      const cooldown = this.probeScheduler.canRemediate(probeId, now);
+      if (!cooldown.admitted) {
+        console.log(
+          `[autopilot] Skipping restart_vm for probe ${probeId} — cooldown ${cooldown.retryAfterMs}ms remaining.`,
+        );
+        return;
+      }
+    }
+
+    if (vmid === undefined) {
+      this.fireAlert(
+        "warning",
+        `rule/${match.rule.id}`,
+        `Service unreachable: ${match.trigger} — no target VM configured for restart`,
+      );
+      return;
+    }
+
+    // Stop then start. We route both through governance so an operator
+    // can deny either step.
+    const stopDecision = await this.governance.evaluate(
+      "stop_vm",
+      { vmid, node },
+      "watch",
+      this.toolRegistry.getAllTools(),
+    );
+    this.eventBus.emit({
+      type: AgentEventType.AutopilotActionGoverned,
+      timestamp: now.toISOString(),
+      data: {
+        rule_id: match.rule.id,
+        action: "stop_vm",
+        vmid,
+        allowed: stopDecision.allowed,
+        tier: stopDecision.tier,
+        reason: stopDecision.reason,
+      },
+    });
+    if (!stopDecision.allowed) {
+      this.fireAlert(
+        "warning",
+        "autopilot/governance",
+        `Service-unreachable restart of "${vmName}" (${vmid}) blocked by governance: ${stopDecision.reason}`,
+      );
+      if (probeId && this.probeScheduler) {
+        this.probeScheduler.recordRemediation(probeId, now);
+      }
+      return;
+    }
+
+    const stopResult = await this.toolRegistry.execute("stop_vm", {
+      vmid,
+      node,
+    });
+    if (!stopResult.success) {
+      this.fireAlert(
+        "warning",
+        `autopilot/${match.rule.id}`,
+        `Failed to stop "${vmName}" (${vmid}) for service-unreachable restart: ${stopResult.error}`,
+      );
+      if (probeId && this.probeScheduler) {
+        this.probeScheduler.recordRemediation(probeId, now);
+      }
+      return;
+    }
+
+    const startDecision = await this.governance.evaluate(
+      "start_vm",
+      { vmid, node },
+      "watch",
+      this.toolRegistry.getAllTools(),
+    );
+    this.eventBus.emit({
+      type: AgentEventType.AutopilotActionGoverned,
+      timestamp: now.toISOString(),
+      data: {
+        rule_id: match.rule.id,
+        action: "start_vm",
+        vmid,
+        allowed: startDecision.allowed,
+        tier: startDecision.tier,
+        reason: startDecision.reason,
+      },
+    });
+    if (!startDecision.allowed) {
+      this.fireAlert(
+        "critical",
+        "autopilot/governance",
+        `Stopped "${vmName}" (${vmid}) but start was blocked by governance: ${startDecision.reason}`,
+      );
+      if (probeId && this.probeScheduler) {
+        this.probeScheduler.recordRemediation(probeId, now);
+      }
+      return;
+    }
+
+    const startResult = await this.toolRegistry.execute("start_vm", {
+      vmid,
+      node,
+    });
+    if (probeId && this.probeScheduler) {
+      this.probeScheduler.recordRemediation(probeId, now);
+    }
+    if (startResult.success) {
+      this.fireAlert(
+        "info",
+        `autopilot/${match.rule.id}`,
+        `Service-unreachable restart of "${vmName}" (${vmid}) completed.`,
+        true,
+      );
+    } else {
+      this.fireAlert(
+        "warning",
+        `autopilot/${match.rule.id}`,
+        `Service-unreachable restart of "${vmName}" (${vmid}) — start failed: ${startResult.error}`,
+      );
+    }
   }
 
   private async handleVmRestart(

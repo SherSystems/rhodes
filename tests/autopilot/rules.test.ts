@@ -86,8 +86,8 @@ function makeRule(overrides?: Partial<AutopilotRule>): AutopilotRule {
 // ── DEFAULT_RULES ────────────────────────────────────────────
 
 describe("DEFAULT_RULES", () => {
-  it("has 4 rules", () => {
-    expect(DEFAULT_RULES).toHaveLength(4);
+  it("has 6 rules (4 cluster + 2 probe-driven)", () => {
+    expect(DEFAULT_RULES).toHaveLength(6);
   });
 
   it("all rules are enabled", () => {
@@ -103,6 +103,8 @@ describe("DEFAULT_RULES", () => {
       "resource_alert_ram",
       "resource_alert_disk",
       "node_offline_alert",
+      "service_unreachable_restart",
+      "provider_unreachable_alert",
     ]);
   });
 });

@@ -16,17 +16,23 @@ export const KNOWN_CONDITIONS = [
   "node_ram_above_90",
   "storage_above_95",
   "node_went_offline",
+  "service_unreachable",
+  "provider_unreachable",
 ] as const;
 
 /** Actions the daemon knows how to dispatch. */
-export const KNOWN_ACTIONS = ["alert", "start_vm"] as const;
+export const KNOWN_ACTIONS = ["alert", "start_vm", "restart_vm"] as const;
 
+// Mirrors the canonical ActionTier from providers/types.ts. The two
+// previously diverged (this file used "approval_write"/"forbidden",
+// the provider type used "risky_write"/"never"); we now keep them in
+// sync so AutopilotRule.tier matches the rest of the engine.
 const ACTION_TIERS = [
   "read",
   "safe_write",
-  "approval_write",
+  "risky_write",
   "destructive",
-  "forbidden",
+  "never",
 ] as const;
 
 // ── Schema ──────────────────────────────────────────────────

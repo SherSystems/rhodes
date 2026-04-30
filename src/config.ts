@@ -3,6 +3,10 @@ import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { CredentialVault } from "./security/vault.js";
+import {
+  serviceHealthConfigSchema,
+  DEFAULT_PROBES,
+} from "./autopilot/probes/schema.js";
 
 dotenv.config();
 
@@ -114,6 +118,10 @@ export const ConfigSchema = z.object({
   migration: MigrationConfigSchema.default({}),
   autopilot: AutopilotConfigSchema,
   executor: ExecutorConfigSchema.default({}),
+  service_health: serviceHealthConfigSchema.default({
+    enabled: true,
+    probes: DEFAULT_PROBES,
+  }),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -190,6 +198,12 @@ export function getConfig(): Config {
       retryOnTimeout: process.env.EXECUTOR_RETRY_ON_TIMEOUT,
       maxToolCallsPerRun: process.env.EXECUTOR_MAX_TOOL_CALLS_PER_RUN,
       maxToolCallsPerPlan: process.env.EXECUTOR_MAX_TOOL_CALLS_PER_PLAN,
+    },
+    service_health: {
+      enabled: true,
+      // Ship the example probes by default; both are `enabled: false`
+      // so they don't auto-start without operator opt-in.
+      probes: DEFAULT_PROBES,
     },
   });
 

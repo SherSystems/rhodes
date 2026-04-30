@@ -311,6 +311,8 @@ async function main() {
           {
             pollIntervalMs: config.autopilot.pollIntervalMs,
             enabled: true,
+            probesEnabled: config.service_health.enabled,
+            probes: config.service_health.probes,
           }
         );
         autopilot.start();
@@ -332,6 +334,8 @@ async function main() {
         {
           pollIntervalMs: config.autopilot.pollIntervalMs,
           enabled: true,
+          probesEnabled: config.service_health.enabled,
+          probes: config.service_health.probes,
         }
       );
       autopilot.start();
@@ -374,6 +378,8 @@ async function main() {
           {
             pollIntervalMs: config.autopilot.pollIntervalMs,
             enabled: true,
+            probesEnabled: config.service_health.enabled,
+            probes: config.service_health.probes,
           }
         );
         autopilot.start();

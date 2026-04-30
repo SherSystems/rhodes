@@ -10,6 +10,7 @@ import type {
   VMInfo,
   NodeInfo,
 } from "../types.js";
+import type { ProbeScheduler } from "./probes/scheduler.js";
 
 // ── RuleMatch ───────────────────────────────────────────────
 
@@ -63,6 +64,33 @@ export const DEFAULT_RULES: AutopilotRule[] = [
     enabled: true,
     cooldown_s: 60,
   },
+  {
+    id: "service_unreachable_restart",
+    name: "Restart VMs whose service health probe has failed",
+    condition: "service_unreachable",
+    action: "restart_vm",
+    // tier intentionally raised: the VM is RUNNING-but-unhealthy, so a
+    // power-cycle is materially riskier than the start_vm rule which
+    // only ever targets stopped VMs. Forces governance every time.
+    params: { severity: "critical" },
+    tier: "risky_write",
+    enabled: true,
+    cooldown_s: 600,
+    per_entity_cooldown_s: 600,
+  },
+  {
+    id: "provider_unreachable_alert",
+    name: "Alert when a provider adapter is unreachable",
+    condition: "provider_unreachable",
+    action: "alert",
+    // No automatic remediation — adapter connection failures usually
+    // mean creds or network, neither of which autopilot can fix safely.
+    params: { severity: "critical" },
+    tier: "read",
+    enabled: true,
+    cooldown_s: 600,
+    per_entity_cooldown_s: 600,
+  },
 ];
 
 // ── Rule Evaluation ─────────────────────────────────────────
@@ -71,12 +99,18 @@ export const DEFAULT_RULES: AutopilotRule[] = [
  * Evaluate all enabled rules against the current and previous cluster state.
  * Returns an array of RuleMatch objects for rules whose conditions are met
  * and whose cooldown period has elapsed.
+ *
+ * The optional `probeScheduler` lets the engine evaluate probe-driven
+ * conditions (`service_unreachable`, `provider_unreachable`). When
+ * absent, those conditions return no matches — keeping the engine
+ * usable in tests and pre-probe-config environments.
  */
 export function evaluateRules(
   rules: AutopilotRule[],
   currentState: ClusterState,
   previousState: ClusterState | null,
   now: Date,
+  probeScheduler?: ProbeScheduler,
 ): RuleMatch[] {
   const matches: RuleMatch[] = [];
 
@@ -92,7 +126,12 @@ export function evaluateRules(
       }
     }
 
-    const ruleMatches = evaluateCondition(rule, currentState, previousState);
+    const ruleMatches = evaluateCondition(
+      rule,
+      currentState,
+      previousState,
+      probeScheduler,
+    );
     matches.push(...ruleMatches);
   }
 
@@ -105,6 +144,7 @@ function evaluateCondition(
   rule: AutopilotRule,
   currentState: ClusterState,
   previousState: ClusterState | null,
+  probeScheduler?: ProbeScheduler,
 ): RuleMatch[] {
   switch (rule.condition) {
     case "vm_was_running_now_stopped":
@@ -118,6 +158,12 @@ function evaluateCondition(
 
     case "node_went_offline":
       return checkNodeOffline(rule, currentState, previousState);
+
+    case "service_unreachable":
+      return checkServiceUnreachable(rule, currentState, probeScheduler);
+
+    case "provider_unreachable":
+      return checkProviderUnreachable(rule, probeScheduler);
 
     default:
       return [];
@@ -265,6 +311,101 @@ function checkNodeOffline(
         },
       });
     }
+  }
+
+  return matches;
+}
+
+/**
+ * Detect VMs whose service-health probe is in the "alerting" phase
+ * (consecutive_failures >= failures_to_alert). One match per probe;
+ * the daemon then routes the match through governance and, if approved,
+ * dispatches a `restart_vm` against the configured target VM.
+ *
+ * The probe state (and per-(probe, target) cooldowns) live in the
+ * `ProbeScheduler` rather than on the rule, so a flapping VM doesn't
+ * get power-cycled in a loop.
+ */
+function checkServiceUnreachable(
+  rule: AutopilotRule,
+  currentState: ClusterState,
+  probeScheduler?: ProbeScheduler,
+): RuleMatch[] {
+  if (!probeScheduler) return [];
+  const matches: RuleMatch[] = [];
+
+  for (const probe of probeScheduler.getProbes()) {
+    if (!probeScheduler.isProbeAlerting(probe.id)) continue;
+
+    // Resolve VM identity. Prefer probe-config target, fall back to
+    // looking up by id in the current cluster state. If neither is
+    // available we still surface the alert via params so the operator
+    // sees something — restart_vm itself will fail safely if vmid is
+    // unknown.
+    let vmName: string | undefined;
+    let vmNode = probe.target_node;
+    if (probe.target_vm_id !== undefined) {
+      const vm = currentState.vms.find(
+        (v) => String(v.id) === String(probe.target_vm_id),
+      );
+      if (vm) {
+        vmName = vm.name;
+        vmNode = vmNode ?? vm.node;
+      }
+    }
+
+    matches.push({
+      rule,
+      trigger: `Service-health probe "${probe.id}" failed for target ${
+        probe.target_vm_id ?? probe.target_host ?? probe.host ?? "?"
+      }`,
+      action: rule.action,
+      params: {
+        probe_id: probe.id,
+        vmid: probe.target_vm_id,
+        vm_name: vmName,
+        node: vmNode,
+        target_host: probe.target_host,
+        kind: probe.kind,
+        severity: rule.params.severity ?? "critical",
+      },
+    });
+  }
+
+  return matches;
+}
+
+/**
+ * Detect provider adapters that have failed their connection check
+ * for >= threshold consecutive ticks. Emits one match per provider.
+ *
+ * Per the design: there is NO automatic remediation — the rule fires
+ * an `alert` action, never a connect/restart. A provider that can't
+ * reach its target almost always means the operator must fix
+ * credentials or networking outside of vclaw.
+ */
+function checkProviderUnreachable(
+  rule: AutopilotRule,
+  probeScheduler?: ProbeScheduler,
+): RuleMatch[] {
+  if (!probeScheduler) return [];
+  const matches: RuleMatch[] = [];
+
+  for (const record of probeScheduler.getProviderHealthSnapshot()) {
+    if (!record.alerting) continue;
+    matches.push({
+      rule,
+      trigger: `Provider adapter "${record.name}" unreachable for ${record.consecutiveFailures} consecutive checks${
+        record.lastError ? ` (${record.lastError})` : ""
+      }`,
+      action: rule.action,
+      params: {
+        provider: record.name,
+        consecutive_failures: record.consecutiveFailures,
+        error: record.lastError,
+        severity: rule.params.severity ?? "critical",
+      },
+    });
   }
 
   return matches;

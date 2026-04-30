@@ -320,6 +320,11 @@ export enum AgentEventType {
   AutopilotRuleFired = "autopilot_rule_fired",
   AutopilotRuleSuppressed = "autopilot_rule_suppressed",
   AutopilotActionGoverned = "autopilot_action_governed",
+  ProbeSucceeded = "probe_succeeded",
+  ProbeFailed = "probe_failed",
+  ProbeRecovered = "probe_recovered",
+  ProviderUnreachable = "provider_unreachable",
+  ProviderRecovered = "provider_recovered",
 }
 
 export interface AgentEvent {

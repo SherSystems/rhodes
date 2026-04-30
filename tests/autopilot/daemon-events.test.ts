@@ -120,9 +120,9 @@ describe("AutopilotDaemon event emission", () => {
     expect(typeof data.rules).toBe("number");
     expect(typeof data.enabled).toBe("number");
     expect(typeof data.matches).toBe("number");
-    // 4 default rules ship; all enabled.
-    expect(data.rules).toBe(4);
-    expect(data.enabled).toBe(4);
+    // 6 default rules ship now (4 cluster + 2 probe-driven); all enabled.
+    expect(data.rules).toBe(6);
+    expect(data.enabled).toBe(6);
     expect(data.matches).toBe(0);
   });
 
