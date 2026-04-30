@@ -107,63 +107,87 @@ export default function Overview() {
   const events = useStore((s) => s.events);
   const setActiveTab = useStore((s) => s.setActiveTab);
 
-  /* ── Aggregate metrics across all providers ───────── */
+  /* ── Aggregate metrics across all providers ─────────
+   *
+   * NOTE: This mirrors the backend aggregator at
+   *   src/providers/aggregator.ts (aggregateClusterSummary)
+   * which is the single source of truth. The same bugs were
+   * fixed in both spots:
+   *   - Skip "topology" + "system" pseudo-providers
+   *   - Cores-weighted CPU avg, ignoring nodes that report 0%
+   *     (e.g. k8s without metrics-server) so they don't drag
+   *     the average down
+   *   - Track containers (k8s pods, proxmox LXC) separately
+   *     so VM totals stay = real VMs only
+   *   - All values default to 0 (never NaN) on missing data
+   */
   const agg = useMemo(() => {
     let totalCpuCores = 0;
-    let totalCpuUsedPct = 0;
-    let cpuNodeCount = 0;
+    let weightedCpuPct = 0;
+    let weightedCpuDenom = 0;
     let totalRamMb = 0;
     let usedRamMb = 0;
     let totalDiskGb = 0;
     let usedDiskGb = 0;
     let totalVms = 0;
     let runningVms = 0;
+    let totalContainers = 0;
+    let runningContainers = 0;
     let totalNodes = 0;
 
     const providers = (multiCluster?.providers ?? []).filter(
-      (p) => p.type !== "topology"
+      (p) => p.type !== "topology" && (p.type as string) !== "system"
     );
 
-    if (providers.length > 0) {
-      for (const prov of providers) {
-        const st = prov.state;
-        for (const node of st.nodes) {
-          totalCpuCores += node.cpu_cores || 0;
-          totalCpuUsedPct += node.cpu_usage_pct || node.cpu_pct || 0;
-          cpuNodeCount++;
-          totalRamMb += node.ram_total_mb || 0;
-          usedRamMb += node.ram_used_mb || 0;
-          totalDiskGb += node.disk_total_gb || 0;
-          usedDiskGb += node.disk_used_gb || 0;
-          totalNodes++;
+    const accumulate = (state: {
+      nodes: ReadonlyArray<{
+        cpu_cores?: number;
+        cpu_usage_pct?: number;
+        cpu_pct?: number;
+        ram_total_mb?: number;
+        ram_used_mb?: number;
+        disk_total_gb?: number;
+        disk_used_gb?: number;
+      }>;
+      vms: ReadonlyArray<{ status?: string }>;
+      containers?: ReadonlyArray<{ status?: string }>;
+    }) => {
+      for (const node of state.nodes) {
+        const cores = Number.isFinite(node.cpu_cores) ? (node.cpu_cores as number) : 0;
+        const cpuPct = Number.isFinite(node.cpu_usage_pct ?? node.cpu_pct)
+          ? ((node.cpu_usage_pct ?? node.cpu_pct) as number)
+          : 0;
+        totalCpuCores += cores;
+        if (cores > 0 && cpuPct > 0) {
+          weightedCpuPct += cpuPct * cores;
+          weightedCpuDenom += cores;
         }
-        for (const vm of st.vms) {
-          totalVms++;
-          if (vm.status === "running") runningVms++;
-        }
-      }
-    } else if (cluster) {
-      // Fallback to single cluster
-      for (const node of cluster.nodes) {
-        totalCpuCores += node.cpu_cores || 0;
-        totalCpuUsedPct += node.cpu_usage_pct || node.cpu_pct || 0;
-        cpuNodeCount++;
-        totalRamMb += node.ram_total_mb || 0;
-        usedRamMb += node.ram_used_mb || 0;
-        totalDiskGb += node.disk_total_gb || 0;
-        usedDiskGb += node.disk_used_gb || 0;
+        totalRamMb += Number.isFinite(node.ram_total_mb) ? (node.ram_total_mb as number) : 0;
+        usedRamMb += Number.isFinite(node.ram_used_mb) ? (node.ram_used_mb as number) : 0;
+        totalDiskGb += Number.isFinite(node.disk_total_gb) ? (node.disk_total_gb as number) : 0;
+        usedDiskGb += Number.isFinite(node.disk_used_gb) ? (node.disk_used_gb as number) : 0;
         totalNodes++;
       }
-      for (const vm of cluster.vms) {
+      for (const vm of state.vms) {
         totalVms++;
         if (vm.status === "running") runningVms++;
       }
+      for (const ct of state.containers ?? []) {
+        totalContainers++;
+        if (ct.status === "running") runningContainers++;
+      }
+    };
+
+    if (providers.length > 0) {
+      for (const prov of providers) accumulate(prov.state);
+    } else if (cluster) {
+      accumulate(cluster);
     }
 
-    // Also try lastHealth as a fallback for resource %
+    // Fall back to lastHealth only when we genuinely have no signal
     const cpuPct =
-      cpuNodeCount > 0
-        ? totalCpuUsedPct / cpuNodeCount
+      weightedCpuDenom > 0
+        ? weightedCpuPct / weightedCpuDenom
         : lastHealth?.resources?.cpu_usage_pct ?? 0;
     const ramPct =
       totalRamMb > 0
@@ -185,6 +209,8 @@ export default function Overview() {
       diskPct,
       totalVms,
       runningVms,
+      totalContainers,
+      runningContainers,
       totalNodes,
     };
   }, [multiCluster, cluster, lastHealth]);

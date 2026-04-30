@@ -26,6 +26,7 @@ import { linearRegression, predictTimeToThreshold } from "../../monitoring/anoma
 import type { DataPoint as AnomalyDataPoint } from "../../monitoring/anomaly.js";
 import { metricStore } from "../../monitoring/metric-store.js";
 import type { RunTelemetryCollector } from "../../monitoring/run-telemetry.js";
+import { aggregateClusterSummary } from "../../providers/aggregator.js";
 
 const STATIC_MIME: Record<string, string> = {
   ".js": "application/javascript",
@@ -158,6 +159,9 @@ export class DashboardServer {
           break;
         case "/api/cluster/all":
           this.handleMultiCluster(res);
+          break;
+        case "/api/cluster/summary":
+          this.handleClusterSummary(res);
           break;
         case "/api/agent/status":
           this.handleAgentStatus(res);
@@ -385,6 +389,16 @@ export class DashboardServer {
       this.json(res, state);
     } catch (err) {
       this.json(res, { error: "Failed to fetch multi-cluster state" }, 500);
+    }
+  }
+
+  private async handleClusterSummary(res: ServerResponse): Promise<void> {
+    try {
+      const state = await this.toolRegistry.getMultiClusterState();
+      const summary = aggregateClusterSummary(state);
+      this.json(res, summary);
+    } catch (err) {
+      this.json(res, { error: "Failed to compute cluster summary" }, 500);
     }
   }
 
