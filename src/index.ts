@@ -24,6 +24,7 @@ import { HealingOrchestrator } from "./healing/orchestrator.js";
 import { ChaosEngine } from "./chaos/engine.js";
 import { RunTelemetryCollector } from "./monitoring/run-telemetry.js";
 import { MigrationAdapter } from "./migration/adapter.js";
+import { ProvisioningAdapter } from "./provisioning/adapter.js";
 import { VSphereClient } from "./providers/vmware/client.js";
 import { ProxmoxClient } from "./providers/proxmox/client.js";
 import { AWSAdapter } from "./providers/aws/adapter.js";
@@ -207,6 +208,16 @@ async function main() {
     });
     await migrationAdapter.connect();
   }
+
+  // Register provisioning adapter (always — pure planning, no upstream creds needed)
+  const provisioningAdapter = new ProvisioningAdapter({
+    llmConfig: {
+      provider: config.ai.provider,
+      apiKey: config.ai.apiKey,
+      model: config.ai.model,
+    },
+  });
+  registry.registerAdapter(provisioningAdapter);
 
   // Register topology adapter (always — uses SQLite for persistence)
   const topologyStore = new TopologyStore();
