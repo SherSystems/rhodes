@@ -97,4 +97,43 @@ describe("SshConfigSchema in getConfig()", () => {
     const { getConfig } = await loadFreshConfig();
     expect(getConfig().ssh.allow_destructive).toBe(true);
   });
+
+  it("loads tier_overrides on a target from VCLAW_SSH_TARGETS_FILE", async () => {
+    const file = join(tmpDir, "targets.json");
+    writeFileSync(file, JSON.stringify([
+      {
+        id: "fragile-prod",
+        host: "10.0.0.1",
+        user: "root",
+        tier_overrides: {
+          default: "risky_write",
+          commands: { uptime: "read", "systemctl-mutate": "destructive" },
+        },
+      },
+    ]));
+    process.env.VCLAW_SSH_TARGETS_FILE = file;
+
+    const { getConfig } = await loadFreshConfig();
+    const cfg = getConfig();
+    expect(cfg.ssh.targets).toHaveLength(1);
+    const target = cfg.ssh.targets[0]!;
+    expect(target.tier_overrides?.default).toBe("risky_write");
+    expect(target.tier_overrides?.commands?.uptime).toBe("read");
+    expect(target.tier_overrides?.commands?.["systemctl-mutate"]).toBe("destructive");
+  });
+
+  it("rejects an unknown tier value in tier_overrides at parse time", async () => {
+    process.env.VCLAW_SSH_TARGETS = JSON.stringify([
+      {
+        id: "x",
+        host: "h",
+        user: "u",
+        tier_overrides: { default: "not-a-real-tier" },
+      },
+    ]);
+    const { getConfig } = await loadFreshConfig();
+    // The config loader fails-soft when JSON is malformed, but the
+    // schema parse for ssh as a whole will throw on bad enum values.
+    expect(() => getConfig()).toThrow();
+  });
 });

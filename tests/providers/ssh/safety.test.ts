@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { classifyCommand } from "../../../src/providers/ssh/safety.js";
+import { applyTierOverrides, classifyCommand } from "../../../src/providers/ssh/safety.js";
 import type { ActionTier } from "../../../src/providers/types.js";
+import type { SshTierOverrides } from "../../../src/providers/ssh/types.js";
 
 interface Case {
   command: string;
@@ -144,6 +145,137 @@ describe("ssh safety classifier", () => {
       // before cat is considered. (Most-dangerous-first scan.)
       expect(r.tier).toBe("destructive");
       expect(r.match).toBe("block-device");
+    });
+  });
+
+  // ── Per-target tier overrides ────────────────────────────────
+  describe("applyTierOverrides", () => {
+    it("returns the input unchanged when overrides is undefined", () => {
+      const base = classifyCommand("uptime");
+      const out = applyTierOverrides(base, "uptime", undefined);
+      expect(out).toBe(base);
+    });
+
+    it("returns the input unchanged when overrides is empty", () => {
+      const base = classifyCommand("uptime");
+      const out = applyTierOverrides(base, "uptime", {});
+      expect(out.tier).toBe("read");
+      expect(out.base_tier).toBeUndefined();
+      expect(out.override).toBeUndefined();
+    });
+
+    it("default floor: bumps read up to risky_write on a fragile target", () => {
+      const overrides: SshTierOverrides = { default: "risky_write" };
+      const out = applyTierOverrides(classifyCommand("uptime"), "uptime", overrides);
+      expect(out.tier).toBe("risky_write");
+      expect(out.base_tier).toBe("read");
+      expect(out.override).toBe("default");
+      expect(out.reason).toContain("per-target floor");
+    });
+
+    it("default floor never lowers — risky_write stays risky_write when floor is read", () => {
+      const overrides: SshTierOverrides = { default: "read" };
+      const base = classifyCommand("systemctl restart nginx");
+      expect(base.tier).toBe("risky_write");
+      const out = applyTierOverrides(base, "systemctl restart nginx", overrides);
+      expect(out.tier).toBe("risky_write");
+      expect(out.base_tier).toBeUndefined();
+    });
+
+    it("commands map: per-tag override (allowlists systemctl-mutate to safe_write)", () => {
+      const overrides: SshTierOverrides = {
+        commands: { "systemctl-mutate": "safe_write" },
+      };
+      const base = classifyCommand("systemctl restart nginx");
+      const out = applyTierOverrides(base, "systemctl restart nginx", overrides);
+      expect(out.tier).toBe("safe_write");
+      expect(out.base_tier).toBe("risky_write");
+      expect(out.override).toBe("systemctl-mutate");
+    });
+
+    it("commands map: exact-command override wins when tag isn't in the map", () => {
+      const overrides: SshTierOverrides = {
+        commands: { "systemctl restart specific-service": "safe_write" },
+      };
+      const out = applyTierOverrides(
+        classifyCommand("systemctl restart specific-service"),
+        "systemctl restart specific-service",
+        overrides,
+      );
+      expect(out.tier).toBe("safe_write");
+      expect(out.override).toBe("systemctl restart specific-service");
+    });
+
+    it("commands map can RAISE a read command to risky_write", () => {
+      const overrides: SshTierOverrides = {
+        commands: { uptime: "risky_write" },
+      };
+      const out = applyTierOverrides(
+        classifyCommand("uptime"),
+        "uptime",
+        overrides,
+      );
+      expect(out.tier).toBe("risky_write");
+      expect(out.base_tier).toBe("read");
+      expect(out.override).toBe("uptime");
+    });
+
+    it("never tier is never overridden (forbidden inputs stay forbidden)", () => {
+      const overrides: SshTierOverrides = {
+        default: "read",
+        commands: { "empty-command": "read" },
+      };
+      const base = classifyCommand("");
+      expect(base.tier).toBe("never");
+      const out = applyTierOverrides(base, "", overrides);
+      expect(out.tier).toBe("never");
+    });
+
+    it("commands map: tag check beats text check", () => {
+      // Both keys "match" but the tag should take precedence.
+      const overrides: SshTierOverrides = {
+        commands: { uptime: "destructive", uptime_text_only: "read" },
+      };
+      const out = applyTierOverrides(
+        classifyCommand("uptime"),
+        "uptime",
+        overrides,
+      );
+      expect(out.tier).toBe("destructive");
+      expect(out.override).toBe("uptime");
+    });
+
+    it("commands and default combine — explicit override wins over the floor", () => {
+      const overrides: SshTierOverrides = {
+        default: "risky_write",
+        commands: { uptime: "read" },
+      };
+      // Without the commands override, default would bump uptime to
+      // risky_write. The exact override unlocks it back down to read.
+      const out = applyTierOverrides(
+        classifyCommand("uptime"),
+        "uptime",
+        overrides,
+      );
+      expect(out.tier).toBe("read");
+      expect(out.override).toBe("uptime");
+    });
+
+    it("no-op override matched by tag still records the override key", () => {
+      // The override sets the same tier — useful for "I explicitly
+      // allowlisted this command on this target" audit trails.
+      const overrides: SshTierOverrides = {
+        commands: { uptime: "read" },
+      };
+      const out = applyTierOverrides(
+        classifyCommand("uptime"),
+        "uptime",
+        overrides,
+      );
+      expect(out.tier).toBe("read");
+      expect(out.override).toBe("uptime");
+      // No tier change, so no base_tier is recorded.
+      expect(out.base_tier).toBeUndefined();
     });
   });
 });

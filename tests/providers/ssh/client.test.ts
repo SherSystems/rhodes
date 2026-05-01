@@ -97,6 +97,77 @@ describe("buildSshArgs", () => {
     expect(args).toContain("-J");
     expect(args).toContain("bastion@10.0.0.99");
   });
+
+  describe("jump_host wiring", () => {
+    it("emits -J BEFORE the user@host destination so ssh parses it as a flag", () => {
+      const args = buildSshArgs(
+        { id: "x", host: "10.0.0.1", user: "root", jump_host: "ops@bastion.example.com" },
+        "uptime",
+        30,
+        true,
+      );
+      const jIdx = args.indexOf("-J");
+      const destIdx = args.indexOf("root@10.0.0.1");
+      expect(jIdx).toBeGreaterThanOrEqual(0);
+      expect(destIdx).toBeGreaterThan(jIdx);
+      expect(args[jIdx + 1]).toBe("ops@bastion.example.com");
+    });
+
+    it("omits -J entirely when jump_host is not set", () => {
+      const args = buildSshArgs(
+        { id: "x", host: "h", user: "u" },
+        "uptime",
+        30,
+        true,
+      );
+      expect(args).not.toContain("-J");
+    });
+
+    it("treats empty-string jump_host as omitted (no -J flag)", () => {
+      const args = buildSshArgs(
+        { id: "x", host: "h", user: "u", jump_host: "" },
+        "uptime",
+        30,
+        true,
+      );
+      expect(args).not.toContain("-J");
+    });
+
+    it("supports multi-hop jump_host (comma-separated proxies)", () => {
+      const args = buildSshArgs(
+        { id: "x", host: "internal.lab", user: "root", jump_host: "ops@hop1,ops@hop2" },
+        "uptime",
+        30,
+        true,
+      );
+      const jIdx = args.indexOf("-J");
+      expect(args[jIdx + 1]).toBe("ops@hop1,ops@hop2");
+    });
+
+    it("combines -J with -p, -i, and strict-host-key flags in the right order", () => {
+      const args = buildSshArgs(
+        {
+          id: "x",
+          host: "internal.lab",
+          user: "root",
+          port: 2200,
+          identity_file: "/keys/id_lab",
+          jump_host: "ops@bastion",
+        },
+        "uptime",
+        30,
+        true,
+      );
+      // All flags must precede the destination
+      const destIdx = args.indexOf("root@internal.lab");
+      expect(destIdx).toBeGreaterThan(0);
+      expect(args.indexOf("-p")).toBeLessThan(destIdx);
+      expect(args.indexOf("-i")).toBeLessThan(destIdx);
+      expect(args.indexOf("-J")).toBeLessThan(destIdx);
+      // The command is the last arg
+      expect(args[args.length - 1]).toBe("uptime");
+    });
+  });
 });
 
 describe("runRemoteCommand", () => {

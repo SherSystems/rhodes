@@ -325,6 +325,7 @@ export enum AgentEventType {
   ProbeRecovered = "probe_recovered",
   ProviderUnreachable = "provider_unreachable",
   ProviderRecovered = "provider_recovered",
+  SshExec = "ssh_exec",
 }
 
 export interface AgentEvent {

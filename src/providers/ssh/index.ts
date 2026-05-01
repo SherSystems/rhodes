@@ -3,8 +3,8 @@
 // ============================================================
 
 export { SshAdapter } from "./adapter.js";
-export type { SshGovernanceEvaluator } from "./adapter.js";
-export { classifyCommand } from "./safety.js";
+export type { SshEventEmitter, SshGovernanceEvaluator } from "./adapter.js";
+export { applyTierOverrides, classifyCommand } from "./safety.js";
 export { runRemoteCommand, buildSshArgs } from "./client.js";
 export type { SpawnFn, SpawnedProcess, RunCommandOptions } from "./client.js";
 export type {
@@ -13,6 +13,7 @@ export type {
   SshExecRequest,
   SshExecResult,
   SshTarget,
+  SshTierOverrides,
 } from "./types.js";
 
 import type { ToolDefinition } from "../types.js";
@@ -52,6 +53,7 @@ export const sshTools: ToolDefinition[] = [
     adapter: "ssh",
     params: [
       { name: "command", type: "string", required: true, description: "The command to classify." },
+      { name: "target_id", type: "string", required: false, description: "Optional target id — when set, per-target tier_overrides are applied." },
     ],
     returns: "SshClassification",
   },

@@ -26,7 +26,17 @@ import type {
 } from "./types.js";
 import type { SpawnFn } from "./client.js";
 import { runRemoteCommand } from "./client.js";
-import { classifyCommand } from "./safety.js";
+import { applyTierOverrides, classifyCommand } from "./safety.js";
+import { AgentEventType, type AgentEvent } from "../../types.js";
+
+/**
+ * Minimal event-bus surface the SSH adapter depends on. Avoids a
+ * circular import on the concrete `EventBus` class — anything with an
+ * `emit(AgentEvent)` will satisfy us (real EventBus, test fakes, etc.).
+ */
+export interface SshEventEmitter {
+  emit(event: AgentEvent): void;
+}
 
 // ── Governance hook ──────────────────────────────────────────
 //
@@ -88,10 +98,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   tool(
     "ssh_dry_run",
-    "Classify a shell command without executing it. Returns the inferred governance tier and the reason. Use this BEFORE ssh_exec so the agent can plan around the safety budget.",
+    "Classify a shell command without executing it. Returns the inferred governance tier and the reason. Use this BEFORE ssh_exec so the agent can plan around the safety budget. If target_id is supplied, per-target tier overrides are applied so the result reflects the actual tier the same command would run at on that host.",
     "read",
     [
       { name: "command", type: "string", required: true, description: "The command to classify." },
+      { name: "target_id", type: "string", required: false, description: "Optional target id — when set, per-target tier_overrides are applied to the result." },
     ],
     "SshClassification",
   ),
@@ -112,12 +123,20 @@ export class SshAdapter implements InfraAdapter {
   private readonly governanceEvaluator: SshGovernanceEvaluator | undefined;
   /** Test seam — let test inject a fake child_process.spawn. */
   private readonly spawnFn: SpawnFn | undefined;
+  /**
+   * Optional event-bus sink for the audit-trail integration. When set,
+   * every `ssh_exec` invocation emits a single `AgentEventType.SshExec`
+   * event covering target id, command, classifier tier, dry-run flag,
+   * and (if executed) exit code + duration. See `emitAuditEvent` below.
+   */
+  private readonly eventBus: SshEventEmitter | undefined;
 
   constructor(
     options: SshAdapterOptions,
     deps: {
       governanceEvaluator?: SshGovernanceEvaluator;
       spawnFn?: SpawnFn;
+      eventBus?: SshEventEmitter;
     } = {},
   ) {
     this.targets = new Map(options.targets.map((t) => [t.id, normalizeTarget(t)]));
@@ -127,6 +146,7 @@ export class SshAdapter implements InfraAdapter {
     this.strictHostKeyChecking = options.strict_host_key_checking ?? true;
     this.governanceEvaluator = deps.governanceEvaluator;
     this.spawnFn = deps.spawnFn;
+    this.eventBus = deps.eventBus;
   }
 
   async connect(): Promise<void> {
@@ -197,16 +217,41 @@ export class SshAdapter implements InfraAdapter {
       user: t.user,
       jump_host: t.jump_host,
       description: t.description,
+      tier_overrides: t.tier_overrides,
       has_identity_file: !!t.identity_file,
     }));
   }
 
   private dryRun(params: Record<string, unknown>): ToolCallResult {
     const command = params.command as string | undefined;
+    const targetId = params.target_id as string | undefined;
     if (typeof command !== "string") {
       return { success: false, error: "command (string) is required" };
     }
-    const classification = classifyCommand(command);
+
+    let classification = classifyCommand(command);
+
+    // Per-target overrides — only applied when caller passed a target.
+    // Unknown ids are surfaced as an error so the agent doesn't think
+    // it dry-ran against a real target when it didn't.
+    if (targetId !== undefined) {
+      const target = this.targets.get(targetId);
+      if (!target) {
+        return {
+          success: false,
+          error: `Unknown SSH target: "${targetId}". Configured targets: ${this.listTargetIds().join(", ") || "(none)"}.`,
+        };
+      }
+      classification = applyTierOverrides(classification, command, target.tier_overrides);
+    }
+
+    this.emitAuditEvent({
+      target_id: targetId,
+      command,
+      classification,
+      dry_run: true,
+    });
+
     return { success: true, data: classification };
   }
 
@@ -230,26 +275,48 @@ export class SshAdapter implements InfraAdapter {
       };
     }
 
-    // 1. Classify
-    const classification = classifyCommand(command);
+    // 1. Classify, then apply per-target tier overrides.
+    const classification = applyTierOverrides(
+      classifyCommand(command),
+      command,
+      target.tier_overrides,
+    );
 
     // 2. Forbidden tier — never executes, no approval flow.
     if (classification.tier === "never") {
+      const refusal = `Command refused: ${classification.reason}`;
+      this.emitAuditEvent({
+        target_id: targetId,
+        command,
+        classification,
+        dry_run: false,
+        outcome: "refused",
+        error: refusal,
+      });
       return {
         success: false,
-        error: `Command refused: ${classification.reason}`,
+        error: refusal,
         data: { classification },
       };
     }
 
     // 3. Kill-switch for destructive — refuse outright unless enabled.
     if (classification.tier === "destructive" && !this.allowDestructive) {
+      const refusal =
+        `Command classified as destructive (${classification.match}) ` +
+        `and ssh.allow_destructive is false. Enable the kill-switch in config to allow ` +
+        `destructive commands to be PROPOSED — they still require explicit per-call approval.`;
+      this.emitAuditEvent({
+        target_id: targetId,
+        command,
+        classification,
+        dry_run: false,
+        outcome: "refused",
+        error: refusal,
+      });
       return {
         success: false,
-        error:
-          `Command classified as destructive (${classification.match}) ` +
-          `and ssh.allow_destructive is false. Enable the kill-switch in config to allow ` +
-          `destructive commands to be PROPOSED — they still require explicit per-call approval.`,
+        error: refusal,
         data: { classification },
       };
     }
@@ -264,9 +331,18 @@ export class SshAdapter implements InfraAdapter {
         command,
       });
       if (!decision.allowed) {
+        const denial = `Governance denied: ${decision.reason}`;
+        this.emitAuditEvent({
+          target_id: targetId,
+          command,
+          classification,
+          dry_run: false,
+          outcome: "denied",
+          error: denial,
+        });
         return {
           success: false,
-          error: `Governance denied: ${decision.reason}`,
+          error: denial,
           data: { classification },
         };
       }
@@ -281,6 +357,18 @@ export class SshAdapter implements InfraAdapter {
       maxOutputBytes: this.maxOutputBytes,
       strictHostKeyChecking: this.strictHostKeyChecking,
       spawnFn: this.spawnFn,
+    });
+
+    this.emitAuditEvent({
+      target_id: targetId,
+      command,
+      classification,
+      dry_run: false,
+      outcome: result.exit_code === 0 ? "executed" : "failed",
+      exit_code: result.exit_code,
+      duration_ms: result.duration_ms,
+      timed_out: result.timed_out,
+      truncated: result.truncated,
     });
 
     return {
@@ -299,6 +387,60 @@ export class SshAdapter implements InfraAdapter {
     };
   }
 
+  // ── Audit-trail integration ───────────────────────────────
+  //
+  // Every ssh_exec / ssh_dry_run call emits one event on the injected
+  // bus. The shape mirrors what the probes scheduler emits for
+  // ProbeFailed / ProbeSucceeded: a flat `data` record with the
+  // operationally interesting fields. Listener exceptions are
+  // swallowed — audit MUST NOT break the execution path.
+
+  private emitAuditEvent(payload: {
+    target_id: string | undefined;
+    command: string;
+    classification: SshClassification;
+    dry_run: boolean;
+    outcome?: "executed" | "failed" | "refused" | "denied";
+    exit_code?: number;
+    duration_ms?: number;
+    timed_out?: boolean;
+    truncated?: boolean;
+    error?: string;
+  }): void {
+    if (!this.eventBus) return;
+
+    const data: Record<string, unknown> = {
+      target_id: payload.target_id ?? null,
+      command: payload.command,
+      tier: payload.classification.tier,
+      match: payload.classification.match,
+      dry_run: payload.dry_run,
+    };
+
+    if (payload.classification.base_tier) {
+      data.base_tier = payload.classification.base_tier;
+      data.override = payload.classification.override;
+    }
+
+    if (payload.outcome !== undefined) data.outcome = payload.outcome;
+    if (payload.exit_code !== undefined) data.exit_code = payload.exit_code;
+    if (payload.duration_ms !== undefined) data.duration_ms = payload.duration_ms;
+    if (payload.timed_out !== undefined) data.timed_out = payload.timed_out;
+    if (payload.truncated !== undefined) data.truncated = payload.truncated;
+    if (payload.error !== undefined) data.error = payload.error;
+
+    try {
+      this.eventBus.emit({
+        type: AgentEventType.SshExec,
+        timestamp: new Date().toISOString(),
+        data,
+      });
+    } catch (err) {
+      // Audit failure must never break execution.
+      console.error("[ssh] audit event emit failed:", err);
+    }
+  }
+
   // ── Helpers ───────────────────────────────────────────────
 
   private listTargetIds(): string[] {
@@ -315,6 +457,7 @@ function normalizeTarget(t: SshTarget): SshTarget {
     identity_file: t.identity_file,
     jump_host: t.jump_host,
     description: t.description,
+    tier_overrides: t.tier_overrides,
   };
 }
 

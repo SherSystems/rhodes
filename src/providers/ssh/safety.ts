@@ -11,7 +11,7 @@
 // ============================================================
 
 import type { ActionTier } from "../types.js";
-import type { SshClassification } from "./types.js";
+import type { SshClassification, SshTierOverrides } from "./types.js";
 
 // ── Shell metacharacter detection ───────────────────────────
 //
@@ -207,6 +207,91 @@ export function classifyCommand(rawCommand: string): SshClassification {
     reason: "No allowlist match — defaulting to destructive (fail-closed). Extend the read/safe_write rule tables in src/providers/ssh/safety.ts to widen.",
     match: "default-fail-closed",
   };
+}
+
+// ── Tier overrides ──────────────────────────────────────────
+
+/**
+ * Total ordering on action tiers, low → high risk. `never` is its own
+ * top: a `never` classification can never be overridden (we always
+ * fail closed on garbage / forbidden input).
+ */
+const TIER_RANK: Record<ActionTier, number> = {
+  read: 0,
+  safe_write: 1,
+  risky_write: 2,
+  destructive: 3,
+  never: 99,
+};
+
+function rank(t: ActionTier): number {
+  return TIER_RANK[t];
+}
+
+/**
+ * Apply per-target tier overrides to a base classification.
+ *
+ * Rules:
+ *   - `never` is never lowered (forbidden inputs stay forbidden).
+ *   - `commands` map is checked first; key match is by the
+ *     classifier `match` tag OR the trimmed command text. The
+ *     override is applied verbatim — it can raise OR lower the tier
+ *     (a sandbox host can downgrade `systemctl restart nginx` to
+ *     safe_write, a fragile prod host can upgrade `ls` to risky_write).
+ *   - Otherwise, `default` acts as a floor: if the base tier is
+ *     strictly less risky than `default`, bump up to `default`.
+ *     `default` never lowers a tier.
+ *   - When the tier changes, the result carries `base_tier` and
+ *     `override` so audit logs can show what fired.
+ */
+export function applyTierOverrides(
+  classification: SshClassification,
+  command: string,
+  overrides: SshTierOverrides | undefined,
+): SshClassification {
+  if (!overrides) return classification;
+  if (classification.tier === "never") return classification;
+
+  const trimmed = command.trim();
+  const cmdMap = overrides.commands ?? {};
+  const matchKey = classification.match;
+
+  // Per-command override — exact tag, then exact command text.
+  const direct =
+    (matchKey && Object.prototype.hasOwnProperty.call(cmdMap, matchKey)
+      ? { tier: cmdMap[matchKey]!, key: matchKey }
+      : undefined) ??
+    (Object.prototype.hasOwnProperty.call(cmdMap, trimmed)
+      ? { tier: cmdMap[trimmed]!, key: trimmed }
+      : undefined);
+
+  if (direct && direct.tier !== classification.tier) {
+    return {
+      ...classification,
+      tier: direct.tier,
+      base_tier: classification.tier,
+      override: direct.key,
+      reason: `${classification.reason} (per-target override "${direct.key}" → ${direct.tier})`,
+    };
+  }
+  if (direct) {
+    // Override matched but is a no-op for this tier; still record it
+    // so audit can see that an explicit allowlist fired.
+    return { ...classification, override: direct.key };
+  }
+
+  // Floor — only bumps tier UP, never down.
+  if (overrides.default && rank(overrides.default) > rank(classification.tier)) {
+    return {
+      ...classification,
+      tier: overrides.default,
+      base_tier: classification.tier,
+      override: "default",
+      reason: `${classification.reason} (per-target floor → ${overrides.default})`,
+    };
+  }
+
+  return classification;
 }
 
 // ── Helpers ─────────────────────────────────────────────────

@@ -122,13 +122,16 @@ async function main() {
   // provider list. Targets come from VCLAW_SSH_TARGETS_FILE (a JSON
   // file) or VCLAW_SSH_TARGETS (inline JSON) — see src/config.ts.
   if (config.ssh.targets.length > 0) {
-    const sshAdapter = new SshAdapter({
-      targets: config.ssh.targets,
-      max_output_bytes: config.ssh.max_output_bytes,
-      default_timeout_s: config.ssh.default_timeout_s,
-      allow_destructive: config.ssh.allow_destructive,
-      strict_host_key_checking: config.ssh.strict_host_key_checking,
-    });
+    const sshAdapter = new SshAdapter(
+      {
+        targets: config.ssh.targets,
+        max_output_bytes: config.ssh.max_output_bytes,
+        default_timeout_s: config.ssh.default_timeout_s,
+        allow_destructive: config.ssh.allow_destructive,
+        strict_host_key_checking: config.ssh.strict_host_key_checking,
+      },
+      { eventBus },
+    );
     await sshAdapter.connect();
     registry.registerAdapter(sshAdapter);
   }
