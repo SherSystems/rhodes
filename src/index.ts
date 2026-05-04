@@ -238,6 +238,32 @@ async function main() {
       );
       await dashboard.start();
 
+      // Self-healing orchestrator — needed for /api/healing/* routes and as a
+      // dependency of the chaos engine.
+      const healer = new HealingOrchestrator({
+        agentCore,
+        toolRegistry: registry,
+        eventBus,
+        governance,
+        dataDir: join(dataDir, "healing"),
+        config: {
+          pollIntervalMs: config.autopilot.pollIntervalMs || 60000,
+          healingEnabled: true,
+          maxConcurrentHeals: 2,
+        },
+      });
+      healer.start();
+      (dashboard as unknown as { healer: HealingOrchestrator }).healer = healer;
+
+      // Chaos engineering engine — required for /api/chaos/* routes.
+      const chaosEngine = new ChaosEngine({
+        agentCore,
+        toolRegistry: registry,
+        eventBus,
+        healingOrchestrator: healer,
+      });
+      (dashboard as unknown as { chaosEngine: ChaosEngine }).chaosEngine = chaosEngine;
+
       // Migration adapter
       if (migrationAdapter) {
         (dashboard as unknown as { migrationAdapter: MigrationAdapter }).migrationAdapter = migrationAdapter;
@@ -403,6 +429,7 @@ async function main() {
         },
       });
       devHealer.start();
+      (dashboard as unknown as { healer: HealingOrchestrator }).healer = devHealer;
 
       // Chaos engineering engine
       const devChaosEngine = new ChaosEngine({
