@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/vclaw-logo.png" alt="RHODES" width="120" />
+  <img src="docs/assets/rhodes-mark.png" alt="RHODES" width="120" />
 </p>
 
 <h1 align="center">RHODES</h1>
