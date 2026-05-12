@@ -100,6 +100,7 @@ export class DashboardServer {
   // may also pass a client-side `local-*` id which we map to the server id once
   // the underlying adapter returns a plan with its own id.
   private migrationActive: Map<string, MigrationActiveRun> = new Map();
+  private readonly startedAt: number = Date.now();
 
   constructor(
     private readonly port: number,
@@ -183,6 +184,13 @@ export class DashboardServer {
       switch (path) {
         case "/":
           this.serveHTML(res);
+          break;
+        case "/healthz":
+        case "/api/healthz":
+          this.handleHealthz(res);
+          break;
+        case "/api/playbooks":
+          this.handlePlaybooks(res);
           break;
         case "/api/cluster":
           this.handleCluster(res);
@@ -415,6 +423,147 @@ export class DashboardServer {
     }
   }
 
+  // ── Health & Playbooks ─────────────────────────────────
+  //
+  // /healthz is intentionally cheap: no provider calls, no fan-out. It reads
+  // process state (uptime, env), in-memory event counts, and registered
+  // playbooks. Designed as a landing page for sysadmins / Tailscale checks.
+
+  private getPackageVersion(): string {
+    try {
+      // src/frontends/dashboard/server.ts → package.json is three levels up.
+      // After tsc, dist/frontends/dashboard/server.js is also three levels up.
+      const pkgPath = join(import.meta.dirname || __dirname, "../../../package.json");
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: string };
+      return pkg.version ?? "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private handleHealthz(res: ServerResponse): void {
+    try {
+      const dryRun = (process.env.RHODES_DRY_RUN ?? process.env.VCLAW_DRY_RUN ?? "")
+        .toLowerCase() === "true";
+
+      const history = this.eventBus.getHistory(200);
+      const lastAlert = [...history]
+        .reverse()
+        .find(
+          (e) =>
+            e.type === AgentEventType.AlertFired ||
+            e.type === AgentEventType.IncidentOpened ||
+            e.type === AgentEventType.HealingEscalated,
+        );
+
+      const activePlans = [...history]
+        .reverse()
+        .filter(
+          (e) =>
+            e.type === AgentEventType.PlanCreated ||
+            e.type === AgentEventType.Replan,
+        )
+        .slice(0, 5)
+        .map((e) => ({
+          id: (e.data?.id as string) ?? (e.data?.plan_id as string) ?? null,
+          mode: (e.data?.mode as string | undefined) ?? null,
+          created_at: e.timestamp,
+        }));
+
+      const openIncidents = (() => {
+        try { return this.incidentManager.getOpen().length; } catch { return 0; }
+      })();
+
+      const playbooks = (() => {
+        try {
+          const engine = (this.healer as unknown as { playbookEngine?: { getAll?: () => unknown[] } })?.playbookEngine;
+          return engine?.getAll ? engine.getAll().length : 0;
+        } catch {
+          return 0;
+        }
+      })();
+
+      this.json(res, {
+        ok: true,
+        version: this.getPackageVersion(),
+        uptime_s: Math.round((Date.now() - this.startedAt) / 1000),
+        process_uptime_s: Math.round(process.uptime()),
+        dry_run: dryRun,
+        shadow_mode: dryRun,
+        providers_connected: 0, // Aggregated state requires async fan-out — keep healthz cheap.
+        sse_clients: this.clients.size,
+        open_incidents: openIncidents,
+        registered_playbooks: playbooks,
+        last_alert: lastAlert
+          ? {
+              type: lastAlert.type,
+              timestamp: lastAlert.timestamp,
+              summary:
+                (lastAlert.data?.message as string) ??
+                (lastAlert.data?.description as string) ??
+                null,
+            }
+          : null,
+        active_plans: activePlans,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("[DashboardServer] healthz error:", err);
+      this.json(res, { ok: false, error: "healthz failed" }, 500);
+    }
+  }
+
+  private handlePlaybooks(res: ServerResponse): void {
+    try {
+      // Cross-cast: the orchestrator stores playbookEngine privately. We expose
+      // it via a typed accessor here so the dashboard can render the registry
+      // without leaking healer internals. When no healer is wired we return [].
+      const engine = (this.healer as unknown as {
+        playbookEngine?: {
+          getAll?: () => Array<{
+            id: string;
+            name: string;
+            description: string;
+            requires_approval: boolean;
+            cooldown_minutes: number;
+            trigger: { metric: string; type: string; severity?: string };
+          }>;
+        };
+      })?.playbookEngine;
+
+      const playbooks = engine?.getAll?.() ?? [];
+
+      // Last-triggered is best-effort: scan recent event history for a
+      // playbook_matched event referencing each playbook.
+      const history = this.eventBus.getHistory(500);
+      const lastTriggered = new Map<string, string>();
+      for (const evt of history) {
+        const ids = (evt.data?.playbook_ids as string[] | undefined) ?? [];
+        const singleId = evt.data?.playbook_id as string | undefined;
+        const allIds = singleId ? [singleId, ...ids] : ids;
+        for (const id of allIds) {
+          if (!lastTriggered.has(id)) lastTriggered.set(id, evt.timestamp);
+        }
+      }
+
+      const enriched = playbooks.map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        trigger: p.trigger,
+        requires_approval: p.requires_approval,
+        cooldown_minutes: p.cooldown_minutes,
+        enabled: true, // No disabled state today; field reserved for future toggles.
+        last_triggered_at: lastTriggered.get(p.id) ?? null,
+      }));
+
+      this.json(res, { playbooks: enriched });
+    } catch (err) {
+      console.error("[DashboardServer] playbooks error:", err);
+      this.json(res, { error: "Failed to fetch playbooks" }, 500);
+    }
+  }
+
   private async handleCluster(res: ServerResponse): Promise<void> {
     try {
       const state = await this.toolRegistry.getClusterState();
@@ -512,12 +661,20 @@ export class DashboardServer {
     // Determine current mode from the most recent plan
     const mode = lastPlanEvent?.data?.mode ?? "watch";
 
+    // Shadow / dry-run flag is sourced from the same env var the executor
+    // reads. Surfacing it on agent/status lets the dashboard render the
+    // SHADOW MODE banner without a separate fetch.
+    const dryRun = (process.env.RHODES_DRY_RUN ?? process.env.VCLAW_DRY_RUN ?? "")
+      .toLowerCase() === "true";
+
     this.json(res, {
       mode,
       current_plan: lastPlanEvent?.data ?? null,
       current_step: lastStepEvent?.data ?? null,
       event_count: history.length,
       connected_clients: this.clients.size,
+      dry_run: dryRun,
+      shadow_mode: dryRun,
     });
   }
 

@@ -50,7 +50,7 @@ export interface AgentCoreOptions {
   eventBus: EventBus;
   config: AIConfig;
   memoryDbPath?: string;
-  executorOptions?: Pick<ExecutorOptions, "reliability">;
+  executorOptions?: Pick<ExecutorOptions, "reliability" | "dryRun">;
 }
 
 export class AgentCore {

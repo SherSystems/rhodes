@@ -157,6 +157,19 @@ const AutopilotConfigSchema = z.object({
     .transform((v) => v === "true"),
 });
 
+const NotificationsConfigSchema = z.object({
+  provider: z.enum(["none", "supra", "telegram_direct"]).default("none"),
+  supraUrl: z.string().default("http://localhost:3100"),
+  supraUserId: z.string().default("rhodes-bot"),
+  telegramBotToken: z.string().default(""),
+  telegramChatId: z.string().default(""),
+  dashboardUrl: z.string().default(""),
+});
+
+const HealthConfigSchema = z.object({
+  port: z.coerce.number().default(7411),
+});
+
 const SshTargetSchema = z.object({
   id: z.string().min(1),
   host: z.string().min(1),
@@ -211,6 +224,17 @@ export const ConfigSchema = z.object({
     allow_destructive: false,
     strict_host_key_checking: true,
   }),
+  /**
+   * Shadow / dry-run mode. When true, Tier-1 (read) actions still execute,
+   * but Tier-2+ (safe_write, risky_write, destructive) actions are PLANNED
+   * and LOGGED but NEVER executed. The autopilot still polls, classifies
+   * events, builds plans, and alerts — it just doesn't mutate anything.
+   *
+   * Set with `RHODES_DRY_RUN=true` for the initial production posture.
+   */
+  dryRun: z.boolean().default(false),
+  notifications: NotificationsConfigSchema.default({}),
+  health: HealthConfigSchema.default({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -308,6 +332,23 @@ export function getConfig(): Config {
       strict_host_key_checking:
         (process.env.RHODES_SSH_STRICT_HOST_KEY_CHECKING ??
           process.env.VCLAW_SSH_STRICT_HOST_KEY_CHECKING) !== "false",
+    },
+    dryRun: (process.env.RHODES_DRY_RUN ?? "").toLowerCase() === "true",
+    notifications: {
+      provider:
+        (process.env.RHODES_ALERT_PROVIDER as
+          | "none"
+          | "supra"
+          | "telegram_direct"
+          | undefined) ?? undefined,
+      supraUrl: process.env.SUPRA_URL,
+      supraUserId: process.env.RHODES_SUPRA_USER_ID,
+      telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+      telegramChatId: process.env.TELEGRAM_CHAT_ID,
+      dashboardUrl: process.env.DASHBOARD_URL ?? process.env.RHODES_DASHBOARD_URL,
+    },
+    health: {
+      port: process.env.RHODES_HEALTH_PORT,
     },
   });
 

@@ -663,11 +663,22 @@ function printBanner(toolRegistry: ToolRegistry): void {
   );
   console.log("  " + dim("Infrastructure, executed."));
   console.log("");
+  const shadow = (process.env.RHODES_DRY_RUN ?? "").toLowerCase() === "true";
+  const shadowTag = shadow ? "  " + yellow("[shadow]") : "";
   console.log(
     "  " +
-      dim(`v${RHODES_VERSION}  ·  ${providerCount} provider${providerCount === 1 ? "" : "s"}  ·  ${toolCount} tools`),
+      dim(`v${RHODES_VERSION}  ·  ${providerCount} provider${providerCount === 1 ? "" : "s"}  ·  ${toolCount} tools`) +
+      shadowTag,
   );
   console.log("  " + dim(`cwd: ${cwdDisplay}`));
+  if (shadow) {
+    console.log(
+      "  " +
+        yellow(
+          "SHADOW MODE — tier-2+ writes are planned/logged but NOT executed (RHODES_DRY_RUN=true)",
+        ),
+    );
+  }
   console.log("");
   console.log(
     "  " +
@@ -819,6 +830,11 @@ export class RhodesCLI {
   // ── Input Handling ────────────────────────────────────────
 
   private async handleInput(input: string): Promise<void> {
+    // One-line shadow indicator per command so operators never forget
+    // they're in dry-run mode while typing into the REPL.
+    if ((process.env.RHODES_DRY_RUN ?? "").toLowerCase() === "true") {
+      console.log("  " + yellow("[shadow]") + dim(" tier-2+ writes will be planned/logged but not executed"));
+    }
     if (input.startsWith("/")) {
       await this.handleSlashCommand(input);
     } else {

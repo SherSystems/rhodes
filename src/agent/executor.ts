@@ -52,6 +52,15 @@ export interface ExecutorOptions {
   };
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
+  /**
+   * Shadow / dry-run mode. When true, tier-2+ actions (safe_write,
+   * risky_write, destructive) are short-circuited after governance
+   * evaluates them — the executor logs a clear `[DRY_RUN] would-execute`
+   * line and returns a synthetic success result containing `dryRun: true`.
+   * Tier-1 (read) actions still run normally so the autopilot can keep
+   * polling and classifying events.
+   */
+  dryRun?: boolean;
 }
 
 export interface GovernanceEngineRef {
@@ -143,6 +152,7 @@ export class Executor {
   private readonly callLimits: ExecutorCallLimitPolicy;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
+  private readonly dryRun: boolean;
   private readonly runCallCounts = new Map<string, number>();
   private readonly planCallCounts = new Map<string, number>();
 
@@ -197,6 +207,17 @@ export class Executor {
 
     this.sleep = options?.sleep ?? this.defaultSleep;
     this.random = options?.random ?? Math.random;
+    this.dryRun = options?.dryRun === true;
+  }
+
+  /**
+   * Returns true if a tier represents a mutating action that must be
+   * blocked in dry-run / shadow mode. Tier-1 ("read") still executes
+   * so the autopilot can poll and classify events; everything that
+   * would touch the world is held back.
+   */
+  private isMutatingTier(tier: ActionTier): boolean {
+    return tier === "safe_write" || tier === "risky_write" || tier === "destructive";
   }
 
   /**
@@ -332,6 +353,28 @@ export class Executor {
         "Explicit approval required",
       );
       return result;
+    }
+
+    // ── Shadow / dry-run gate ─────────────────────────────────
+    // Tier-1 (read) actions still run normally so the autopilot can keep
+    // observing the cluster. Tier-2+ actions get short-circuited: we log
+    // a clear "would-execute" line, emit step_completed with a synthetic
+    // success payload (dryRun: true), and skip the real tool call.
+    if (this.dryRun && this.isMutatingTier(evaluation.tier)) {
+      const paramSummary = this.summarizeParams(step.params);
+      console.log(
+        `[DRY_RUN] would-execute tier=${evaluation.tier} action=${step.action} ${paramSummary} blocked by RHODES_DRY_RUN`,
+      );
+      const dryResult: StepResult = {
+        success: true,
+        data: { dryRun: true, action: step.action, tier: evaluation.tier, params: step.params },
+        duration_ms: Date.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+      this.governance.circuitBreaker.track(true);
+      this.emitStepCompleted(step, dryResult, planId, runId);
+      this.logAudit(step, mode, "success", dryResult, planId, "dry-run (shadow mode)");
+      return dryResult;
     }
 
     // Capture state before execution
@@ -817,6 +860,27 @@ export class Executor {
       return fallback;
     }
     return Math.min(max, Math.max(min, value));
+  }
+
+  /**
+   * Format a small subset of params into a one-line log fragment for the
+   * dry-run audit. Truncates long values so the log line stays grep-friendly.
+   */
+  private summarizeParams(params: Record<string, unknown>): string {
+    const entries = Object.entries(params).slice(0, 4);
+    if (entries.length === 0) return "";
+    return entries
+      .map(([k, v]) => {
+        let str: string;
+        try {
+          str = typeof v === "string" ? v : JSON.stringify(v);
+        } catch {
+          str = String(v);
+        }
+        if (str.length > 64) str = str.slice(0, 61) + "...";
+        return `${k}=${str}`;
+      })
+      .join(" ");
   }
 
   private readonly defaultSleep = async (ms: number): Promise<void> => {

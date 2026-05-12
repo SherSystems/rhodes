@@ -11,7 +11,7 @@ export function getHTML(): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RHODES — Infrastructure Agent</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230B1120'/%3E%3Cpath d='M8 8 L8 24 M8 8 L14 8 M8 24 L14 24 M8 16 L12 16' stroke='%230ACDAA' stroke-width='2.5' stroke-linecap='round' fill='none'/%3E%3Cpath d='M24 8 L24 24 M24 8 L18 8 M24 24 L18 24 M24 16 L20 16' stroke='%230ACDAA' stroke-width='2.5' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='none'%3E%3Crect width='100' height='100' rx='18' fill='%231E2328'/%3E%3Cg stroke='%234DA3F7' stroke-width='9' stroke-linejoin='miter' stroke-linecap='square' fill='none'%3E%3Cpolyline points='22,22 64,38 22,54'/%3E%3Cpolyline points='22,46 64,62 22,78'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -20,34 +20,36 @@ export function getHTML(): string {
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg-primary: #0B1120;
-  --bg-card: #111928;
-  --bg-elevated: #162035;
-  --bg-hover: #1a2540;
-  --bg-active: #1f2d4a;
+  /* RHODES brand palette — see /home/pranav/rhodes-brand/BRAND_BIBLE.md §3 */
+  --bg-primary: #1E2328;       /* Gunmetal */
+  --bg-card: #2A2F36;          /* Steel raised */
+  --bg-elevated: #2F363D;      /* Slate */
+  --bg-hover: #353B43;
+  --bg-active: #3D444D;
 
   --border: rgba(255, 255, 255, 0.07);
   --border-subtle: rgba(255, 255, 255, 0.04);
   --border-focus: rgba(255, 255, 255, 0.12);
 
-  --text-primary: #EEF2F7;
-  --text-secondary: #8899B0;
-  --text-tertiary: #5A7491;
+  --text-primary: #E6E9EC;     /* Paper */
+  --text-secondary: #8B949E;   /* Steel */
+  --text-tertiary: #6E7681;
   --text-accent: #ffffff;
 
-  --teal: #0ACDAA;
-  --teal-deep: #07A589;
-  --teal-muted: rgba(10, 205, 170, 0.10);
-  --teal-border: rgba(10, 205, 170, 0.20);
+  /* Accent — Rhodes Blue (canonical, image wins over markdown export) */
+  --teal: #4DA3F7;
+  --teal-deep: #2F8AE0;
+  --teal-muted: rgba(77, 163, 247, 0.10);
+  --teal-border: rgba(77, 163, 247, 0.20);
 
-  --green: #0ACDAA;
-  --green-muted: rgba(10, 205, 170, 0.10);
-  --red: #ef4444;
+  --green: #22C55E;
+  --green-muted: rgba(34, 197, 94, 0.10);
+  --red: #EF4444;
   --red-muted: rgba(239, 68, 68, 0.10);
-  --amber: #eab308;
-  --amber-muted: rgba(234, 179, 8, 0.10);
-  --blue: #3b9eff;
-  --blue-muted: rgba(59, 158, 255, 0.10);
+  --amber: #F5A623;
+  --amber-muted: rgba(245, 166, 35, 0.10);
+  --blue: #4DA3F7;
+  --blue-muted: rgba(77, 163, 247, 0.10);
   --purple: #a78bfa;
   --purple-muted: rgba(167, 139, 250, 0.10);
 
@@ -467,7 +469,7 @@ body {
   gap: 8px;
   padding: 10px 24px;
   background: var(--amber-muted);
-  border-bottom: 1px solid rgba(234, 179, 8, 0.15);
+  border-bottom: 1px solid rgba(245, 166, 35, 0.15);
   font-size: 0.75rem;
   color: var(--amber);
   animation: fadeIn 0.3s ease-out;
@@ -3037,20 +3039,22 @@ tbody tr:last-child td {
 </head>
 <body>
 
+<!-- ── Shadow Mode Banner ──────────────────────────── -->
+<!-- Hidden by default; main.js flips display:flex when /api/agent/status
+     returns shadow_mode=true. Sits above the header so it's never missed. -->
+<div id="shadowModeBanner" style="display:none;background:#3a2a14;color:#ffb84d;padding:10px 18px;font-family:var(--font-brand);font-weight:700;letter-spacing:0.06em;text-align:center;border-bottom:1px solid #c88533;text-transform:uppercase;">
+  SHADOW MODE &middot; RHODES_DRY_RUN=true &middot; Tier-1 reads execute; Tier-2+ writes are planned/logged but NOT executed.
+</div>
+
 <!-- ── Header ──────────────────────────────────────── -->
 <header class="header">
   <div class="logo">
-    <svg width="24" height="24" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect width="72" height="72" rx="18" fill="#0ACDAA"/>
-      <line x1="17" y1="17" x2="26" y2="17" stroke="white" stroke-width="4" stroke-linecap="round"/>
-      <line x1="17" y1="17" x2="17" y2="55" stroke="white" stroke-width="4" stroke-linecap="round"/>
-      <line x1="17" y1="55" x2="26" y2="55" stroke="white" stroke-width="4" stroke-linecap="round"/>
-      <line x1="55" y1="17" x2="46" y2="17" stroke="white" stroke-width="4" stroke-linecap="round"/>
-      <line x1="55" y1="17" x2="55" y2="55" stroke="white" stroke-width="4" stroke-linecap="round"/>
-      <line x1="55" y1="55" x2="46" y2="55" stroke="white" stroke-width="4" stroke-linecap="round"/>
-      <line x1="26" y1="29" x2="46" y2="29" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
-      <line x1="26" y1="36" x2="46" y2="36" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
-      <line x1="26" y1="43" x2="46" y2="43" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+    <svg width="24" height="24" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="RHODES">
+      <rect width="100" height="100" rx="18" fill="#1E2328"/>
+      <g stroke="#4DA3F7" stroke-width="9" stroke-linejoin="miter" stroke-linecap="square" fill="none">
+        <polyline points="22,22 64,38 22,54"/>
+        <polyline points="22,46 64,62 22,78"/>
+      </g>
     </svg>
     RHO<span class="brand-accent">DES</span>
   </div>
@@ -6379,6 +6383,20 @@ refreshTopology();
     }
   });
 })();
+
+// ── Shadow Mode Banner ─────────────────────────────────
+// Reflect /api/agent/status.shadow_mode in the top banner. We poll a
+// little aggressively at startup so operators see the banner on first
+// load; afterwards we settle into a 30s cadence.
+function refreshShadowBanner() {
+  fetch('/api/agent/status').then(function(r) { return r.json(); }).then(function(d) {
+    var b = document.getElementById('shadowModeBanner');
+    if (!b) return;
+    b.style.display = (d && d.shadow_mode) ? 'block' : 'none';
+  }).catch(function() { /* ignore — banner just stays in its last state */ });
+}
+refreshShadowBanner();
+setInterval(refreshShadowBanner, 30000);
 
 // ── Init ───────────────────────────────────────────────
 connect();

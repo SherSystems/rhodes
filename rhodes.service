@@ -1,16 +1,22 @@
 [Unit]
 Description=RHODES — Agentic Infrastructure Operations
-After=network.target
+Documentation=https://github.com/SherSystems/rhodes
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=YOUR_USER
-WorkingDirectory=/path/to/rhodes
-Environment=PATH=/path/to/node/bin:/usr/bin:/bin
-EnvironmentFile=/path/to/rhodes/.env
-ExecStart=/path/to/node/bin/npx tsx src/index.ts full
+User=pranav
+WorkingDirectory=/opt/rhodes
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/opt/rhodes/.env
+ExecStart=/usr/bin/env node dist/index.js full
 Restart=on-failure
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

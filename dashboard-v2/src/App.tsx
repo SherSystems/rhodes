@@ -9,6 +9,8 @@ import Migrations from "./components/Migrations";
 import Operations from "./components/pages/Operations";
 import Costs from "./components/pages/Costs";
 import Chaos from "./components/Chaos";
+import Health from "./components/pages/Health";
+import Playbooks from "./components/pages/Playbooks";
 import CommandPalette from "./components/CommandPalette";
 import ToastContainer from "./components/Toast";
 
@@ -32,6 +34,8 @@ export function App() {
             {activeTab === "operations" && <Operations />}
             {activeTab === "costs" && <Costs />}
             {activeTab === "chaos" && <Chaos />}
+            {activeTab === "health" && <Health />}
+            {activeTab === "playbooks" && <Playbooks />}
           </main>
         </div>
       </div>

@@ -82,6 +82,26 @@ const navItems: (NavItem | "divider")[] = [
   },
   "divider",
   {
+    id: "health",
+    label: "Health",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 9 L5 9 L7 4 L11 14 L13 9 L16 9" />
+      </svg>
+    ),
+  },
+  {
+    id: "playbooks",
+    label: "Playbooks",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 2 h10 a2 2 0 0 1 2 2 v12 l-3 -2 l-3 2 l-3 -2 l-3 2 V4 a2 2 0 0 1 2 -2 z" />
+        <line x1="6" y1="7" x2="12" y2="7" />
+        <line x1="6" y1="10" x2="10" y2="10" />
+      </svg>
+    ),
+  },
+  {
     id: "chaos",
     label: "Chaos",
     icon: (

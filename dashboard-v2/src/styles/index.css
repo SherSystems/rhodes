@@ -491,7 +491,7 @@ body {
   gap: 8px;
   padding: 10px 24px;
   background: var(--amber-muted);
-  border-bottom: 1px solid rgba(234, 179, 8, 0.15);
+  border-bottom: 1px solid rgba(245, 166, 35, 0.15);
   font-size: 0.75rem;
   color: var(--amber);
   animation: fadeIn 0.3s ease-out;
@@ -3634,13 +3634,13 @@ button, select, a, .tab, .incident-card, .incident-row, .audit-header, .audit-pl
     border: none;
     cursor: pointer;
     z-index: 100;
-    box-shadow: 0 4px 16px rgba(10, 205, 170, 0.3);
+    box-shadow: 0 4px 16px rgba(77, 163, 247, 0.3);
     transition: transform 0.15s, box-shadow 0.15s;
   }
 
   .sidebar-fab:hover {
     transform: scale(1.08);
-    box-shadow: 0 6px 24px rgba(10, 205, 170, 0.4);
+    box-shadow: 0 6px 24px rgba(77, 163, 247, 0.4);
   }
 
   .sidebar-fab:active {
@@ -3842,7 +3842,7 @@ button, select, a, .tab, .incident-card, .incident-row, .audit-header, .audit-pl
     border: none;
     cursor: pointer;
     z-index: 100;
-    box-shadow: 0 4px 16px rgba(10, 205, 170, 0.3);
+    box-shadow: 0 4px 16px rgba(77, 163, 247, 0.3);
   }
 
   .sidebar-fab:active {
@@ -4247,6 +4247,16 @@ button, select, a, .tab, .incident-card, .incident-row, .audit-header, .audit-pl
   font-weight: 700;
   color: var(--text-primary);
   margin: 0;
+}
+
+.page-subtitle {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 4px 0 0 0;
+  width: 100%;
+  flex-basis: 100%;
+  line-height: 1.5;
+  max-width: 720px;
 }
 
 .sub-tabs {

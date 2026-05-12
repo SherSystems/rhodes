@@ -54,7 +54,21 @@ import { createMigrationAdapter } from "./bootstrap/migration.js";
 import { spawn } from "node:child_process";
 import type { SSHExecResult } from "./migration/types.js";
 import { join } from "path";
-import { mkdirSync } from "fs";
+import { mkdirSync, readFileSync } from "fs";
+import { fileURLToPath } from "node:url";
+import { Notifier, attachAlertBridge, HealthzServer } from "./notifications/index.js";
+
+// Version is sourced from package.json so we keep a single source of truth.
+const RHODES_VERSION: string = (() => {
+  try {
+    const here = fileURLToPath(import.meta.url);
+    const pkgPath = join(here, "..", "..", "package.json");
+    const raw = readFileSync(pkgPath, "utf-8");
+    return (JSON.parse(raw) as { version?: string }).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 async function main() {
   const args = process.argv.slice(2);
@@ -226,13 +240,62 @@ async function main() {
           maxToolCallsPerPlan: config.executor.maxToolCallsPerPlan,
         },
       },
+      dryRun: config.dryRun,
     },
+  });
+
+  if (config.dryRun) {
+    console.log(
+      "[rhodes] SHADOW MODE — RHODES_DRY_RUN=true. Tier-1 reads execute; tier-2+ writes are planned/logged but NOT executed.",
+    );
+  }
+
+  // ── Notifications: build the alert provider once and bridge it
+  // to the EventBus so autopilot/incident/health hooks just emit
+  // events and the bridge takes care of delivery. The notifier is
+  // safe to construct even when provider === "none".
+  const notifier = new Notifier({
+    provider: config.notifications.provider,
+    supra: {
+      url: config.notifications.supraUrl,
+      userId: config.notifications.supraUserId,
+    },
+    telegram: {
+      botToken: config.notifications.telegramBotToken,
+      chatId: config.notifications.telegramChatId,
+    },
+  });
+  attachAlertBridge(eventBus, {
+    notifier,
+    dashboardUrl: config.notifications.dashboardUrl || undefined,
+  });
+  console.log(`[rhodes] Alert provider: ${notifier.provider.id}`);
+
+  // ── /healthz endpoint: always on, even in cli mode. Useful for
+  // systemd ExecStartPost smoke tests and external uptime probes.
+  const healthz = new HealthzServer({
+    port: config.health.port,
+    version: RHODES_VERSION,
+    dryRun: config.dryRun,
+    providersConnected: () =>
+      registry.getHypervisorAdapters().map((a) => a.name),
+    activePlans: () => {
+      // We don't track active plans centrally yet; surface 0 as a
+      // safe default. Downstream we'll plumb in a real counter from
+      // the orchestrator without changing the wire format.
+      return 0;
+    },
+    notifier,
+  });
+  await healthz.start().catch((err) => {
+    console.warn(`[healthz] Failed to bind :${config.health.port} — ${err instanceof Error ? err.message : String(err)}`);
   });
 
   // Handle shutdown
   const shutdown = async () => {
     console.log("\nShutting down RHODES...");
     runTelemetry.close();
+    await healthz.stop().catch(() => undefined);
     await registry.disconnectAll();
     process.exit(0);
   };

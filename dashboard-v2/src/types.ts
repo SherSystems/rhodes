@@ -510,5 +510,7 @@ export type PageId =
   | "migrations"
   | "operations"
   | "costs"
-  | "chaos";
+  | "chaos"
+  | "health"
+  | "playbooks";
 export type TabId = PageId;

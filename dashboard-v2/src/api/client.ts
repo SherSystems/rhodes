@@ -348,7 +348,39 @@ export const fetchCostTopResources = async (
   return filterByComparison(normalizeCostTopResources(payload), comparison);
 };
 
-// Health
+// Health & Playbooks
+export interface Healthz {
+  ok: boolean;
+  version: string;
+  uptime_s: number;
+  process_uptime_s: number;
+  dry_run: boolean;
+  shadow_mode: boolean;
+  providers_connected: number;
+  sse_clients: number;
+  open_incidents: number;
+  registered_playbooks: number;
+  last_alert: { type: string; timestamp: string; summary: string | null } | null;
+  active_plans: Array<{ id: string | null; mode: string | null; created_at: string }>;
+  timestamp: string;
+}
+
+export const fetchHealthz = () => request<Healthz>("/healthz");
+
+export interface PlaybookSummary {
+  id: string;
+  name: string;
+  description: string;
+  trigger: { metric: string; type: string; severity?: string };
+  requires_approval: boolean;
+  cooldown_minutes: number;
+  enabled: boolean;
+  last_triggered_at: string | null;
+}
+
+export const fetchPlaybooks = () =>
+  request<{ playbooks: PlaybookSummary[] }>("/api/playbooks");
+
 export const fetchPredictions = () =>
   request<{ predictions: import("../types").Prediction[] }>("/api/health/predictions");
 
