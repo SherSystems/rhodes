@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AgentEventType } from "../types.js";
 import type { Goal, AgentEvent } from "../types.js";
 import type { EventBus } from "../agent/events.js";
+import { jellyfinConfigFromEnv } from "../playbooks/service-http-probe.js";
 
 // ── Anomaly ─────────────────────────────────────────────────
 
@@ -218,6 +219,9 @@ export class PlaybookEngine {
       case "proxmox_storage_exhaustion_pause":
         return `STORAGE_EXHAUSTION_PAUSE: VM ${labels.vmid || "unknown"} on ${labels.node || "unknown"} is paused (io-error). Run proxmox-storage-pause playbook — prune snapshots, qm resume, verify.`;
 
+      case "jellyfin-service-probe":
+        return `SERVICE_DOWN/UNHEALTHY: in-VM service "${labels.service_name || "jellyfin"}" failed its HTTP probe. Run service-http-probe playbook — ping, systemctl is-active, restart, verify.`;
+
       default:
         return `Execute healing playbook "${playbook.name}" — ${anomaly.message}`;
     }
@@ -398,6 +402,40 @@ export const DEFAULT_PLAYBOOKS: Playbook[] = [
     cooldown_minutes: 10,
     requires_approval: true,
     max_retries: 1,
+  },
+  {
+    id: "jellyfin-service-probe",
+    name: "Jellyfin Service Probe",
+    description:
+      "HTTP probe + auto-restart for the Jellyfin media service inside the JellyFinServer VM (vmid 101). " +
+      "Reusable template for any in-VM HTTP service — see src/playbooks/service-http-probe.ts. " +
+      "Detects 'VM up, service down' by probing the in-guest HTTP endpoint; classifies via systemctl; " +
+      "auto-restarts at Tier 2 with a 3-restart / 30-min loop guard.",
+    trigger: {
+      metric: "service_http_status",
+      type: "state_change",
+      severity: "critical",
+      labels: { service_name: "jellyfin" },
+    },
+    actions: [
+      {
+        type: "custom_goal",
+        params: {
+          goal:
+            "Execute service-http-probe playbook for jellyfin: ping VM, " +
+            "systemctl is-active jellyfin, restart on SERVICE_DOWN / SERVICE_UNHEALTHY, " +
+            "verify recovery over 30s. Hand off if VM is unreachable.",
+          playbook_module: "src/playbooks/service-http-probe.ts",
+          event_class: "SERVICE_DOWN",
+          service_config: jellyfinConfigFromEnv(),
+        },
+        description:
+          "Run the service-http-probe diagnostic + restart chain for Jellyfin",
+      },
+    ],
+    cooldown_minutes: 5,
+    requires_approval: false,
+    max_retries: 2,
   },
   {
     id: "predictive_disk_full",
