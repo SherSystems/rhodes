@@ -328,6 +328,12 @@ export enum AgentEventType {
   StorageExhaustionPause = "storage_exhaustion_pause",
   ThinPoolWarning = "thin_pool_warning",
   StaleSnapshotDetected = "stale_snapshot_detected",
+  // In-VM service-level probes (jellyfin, etc.)
+  ServiceUnreachable = "service_unreachable",
+  ServiceDown = "service_down",
+  ServiceUnhealthy = "service_unhealthy",
+  ServiceRecovered = "service_recovered",
+  ServiceRestartLoopDetected = "service_restart_loop_detected",
 }
 
 // ── Storage Exhaustion Event Class ──────────────────────────
