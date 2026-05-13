@@ -1202,6 +1202,294 @@ tbody tr:last-child td {
   flex-shrink: 0;
 }
 
+/* ── Remediate button on incident cards ─────────────── */
+.incident-card-header .incident-remediate-wrap {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.incident-remediate-btn {
+  appearance: none;
+  border: 1px solid var(--teal-border);
+  background: var(--teal-muted);
+  color: var(--teal);
+  font-family: var(--font-sans);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s;
+  flex-shrink: 0;
+}
+
+.incident-remediate-btn:hover:not(:disabled) {
+  background: var(--teal);
+  color: var(--bg-primary);
+  border-color: var(--teal);
+}
+
+.incident-remediate-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.incident-remediate-done {
+  font-size: 0.66rem;
+  color: var(--text-tertiary);
+  font-style: italic;
+  flex-shrink: 0;
+}
+
+/* ── Pending Approvals Panel ────────────────────────── */
+.approvals-section {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+  padding: 0;
+  animation: fadeIn 0.25s ease-out;
+}
+
+.approvals-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px 8px;
+}
+
+.approvals-section-title {
+  font-family: var(--font-brand);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-size: 0.86rem;
+  color: var(--text-accent);
+  text-transform: none;
+}
+
+.approvals-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--teal);
+  color: var(--bg-primary);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.approvals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 24px 14px;
+}
+
+.approval-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--teal);
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.approval-card.safety {
+  border-left-color: var(--green);
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.04), var(--bg-card) 40%);
+  opacity: 0.92;
+}
+
+.approval-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.approval-action {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  word-break: break-word;
+  flex: 1;
+  min-width: 0;
+}
+
+.approval-tier {
+  font-size: 0.60rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.approval-tier.read { background: var(--green-muted); color: var(--green); }
+.approval-tier.safe_write { background: var(--blue-muted); color: var(--blue); }
+.approval-tier.risky_write { background: var(--amber-muted); color: var(--amber); }
+.approval-tier.destructive { background: var(--red-muted); color: var(--red); }
+
+.approval-safety-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.60rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 3px;
+  background: var(--green-muted);
+  color: var(--green);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.approval-time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.approval-reasoning {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.approval-params {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.approval-params .pk { color: var(--text-tertiary); }
+.approval-params .pv { color: var(--text-primary); word-break: break-word; }
+
+.approval-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.approval-btn {
+  appearance: none;
+  font-family: var(--font-sans);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s, opacity 0.12s, border-color 0.12s, color 0.12s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.approval-btn.approve {
+  background: var(--teal);
+  color: var(--bg-primary);
+  border: 1px solid var(--teal);
+}
+
+.approval-btn.approve:hover:not(:disabled) {
+  background: var(--teal-deep);
+  border-color: var(--teal-deep);
+}
+
+.approval-btn.reject {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-focus);
+}
+
+.approval-btn.reject:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.approval-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.approval-btn .spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.approval-state-pill {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.approval-state-pill.approved { color: var(--teal); border-color: var(--teal-border); }
+.approval-state-pill.rejected { color: var(--text-tertiary); }
+
+.approval-error {
+  font-size: 0.70rem;
+  color: var(--red);
+  font-family: var(--font-mono);
+}
+
+/* ── Toast for transient errors ─────────────────────── */
+.rhodes-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--red);
+  border-left-width: 3px;
+  color: var(--text-primary);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  z-index: 200;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  animation: fadeIn 0.2s ease-out;
+  max-width: 360px;
+}
+
+/* Narrow viewport reflow: ensure approval cards stay readable */
+@media (max-width: 720px) {
+  .approval-card-header { gap: 6px; }
+  .approval-action { font-size: 0.72rem; }
+  .approval-params { grid-template-columns: 1fr; gap: 1px 0; }
+  .incident-card-header .incident-remediate-wrap { margin-left: 0; width: 100%; }
+}
+
 /* Incident Timeline (expanded) */
 .incident-timeline {
   padding: 4px 24px 16px 24px;
@@ -3138,6 +3426,15 @@ tbody tr:last-child td {
 <div class="main">
   <!-- Left Column -->
   <div class="col-left">
+    <!-- Pending Approvals (only renders when there are pending plans) -->
+    <div class="approvals-section" id="approvalsSection" style="display:none">
+      <div class="approvals-section-header">
+        <span class="approvals-section-title">Pending Approvals</span>
+        <span class="approvals-count-badge" id="approvalsCountBadge">0</span>
+      </div>
+      <div class="approvals-list" id="approvalsList"></div>
+    </div>
+
     <!-- Tabs -->
     <div class="tabs">
       <div class="tab active" data-tab="topology">
@@ -3596,6 +3893,22 @@ const state = {
   healingBanners: [], // { type: 'paused'|'escalated', message, id }
   healthHistory: [],  // last 30 ClusterHealthSummary objects for sparklines
   lastHealth: null,   // most recent health_check data
+  approvals: {
+    // plan_id -> PendingApprovalEntry (full row as returned by the server)
+    pending: {},
+    // plan_id -> { decision, operator, timestamp } once resolved (used to
+    // briefly show a state pill in place of buttons before the card fades).
+    decisions: {},
+    // plan_id -> 'approve'|'reject' while a POST is in flight (suppresses
+    // re-clicks and surfaces a spinner).
+    inFlight: {},
+    // plan_id -> error string from the last failed POST.
+    errors: {},
+  },
+  remediate: {
+    // incident_id -> 'pending'|'done' (drives Remediate button state).
+    state: {},
+  },
 };
 
 // ── SSE Connection ─────────────────────────────────────
@@ -3633,6 +3946,7 @@ function connect() {
   const planAndIncidentEvents = [
     'plan_created',
     'plan_approved',
+    'plan_rejected',
     'step_started',
     'step_completed',
     'step_failed',
@@ -3656,6 +3970,24 @@ function connect() {
   for (const eventType of planAndIncidentEvents) {
     bindParsedEvent(eventType, handleEvent);
   }
+
+  // Pending-approval lifecycle: push new pending plans into the panel and
+  // remove/transition cards when a decision lands. The PlanApproved /
+  // PlanRejected events are already in planAndIncidentEvents so they
+  // flow through handleEvent for the audit/event-log path; the extra
+  // listeners below mutate the approvals panel directly.
+  bindParsedEvent('awaiting_approval', (evt) => {
+    const entry = (evt && evt.data) ? evt.data : evt;
+    handleAwaitingApproval(entry);
+  });
+  bindParsedEvent('plan_approved', (evt) => {
+    const d = evt.data || evt;
+    handlePlanDecisionBroadcast(d, 'approve');
+  });
+  bindParsedEvent('plan_rejected', (evt) => {
+    const d = evt.data || evt;
+    handlePlanDecisionBroadcast(d, 'reject');
+  });
 
   const chaosEvents = [
     'chaos_simulated',
@@ -3962,6 +4294,12 @@ function formatEvent(event) {
       return {
         iconClass: 'ok', icon: '&#10003;',
         title: 'Plan approved',
+      };
+    case 'plan_rejected':
+      return {
+        iconClass: 'err', icon: '&#10007;',
+        title: 'Plan rejected',
+        detail: d.operator ? 'by ' + escapeHtml(d.operator) : null,
       };
     case 'step_started':
       return {
@@ -4708,6 +5046,292 @@ function formatDuration(ms) {
   return s + 's';
 }
 
+// ── Toast (transient error surface) ─────────────────────
+function showToast(msg) {
+  // Replace any existing toast so consecutive failures don't stack.
+  const existing = document.getElementById('rhodesToast');
+  if (existing) existing.remove();
+  const el = document.createElement('div');
+  el.className = 'rhodes-toast';
+  el.id = 'rhodesToast';
+  el.textContent = String(msg);
+  document.body.appendChild(el);
+  setTimeout(() => { try { el.remove(); } catch {} }, 4500);
+}
+
+// ── Pending Approvals ───────────────────────────────────
+
+async function loadPendingApprovals() {
+  try {
+    const data = await fetch('/api/agent/pending-approvals').then(r => r.json());
+    if (!Array.isArray(data)) return;
+    // Replace the pending map with the server's truth — but keep any
+    // in-flight POSTs or sticky decision pills, because those represent
+    // local UI state that the server snapshot won't reflect.
+    const next = {};
+    for (const entry of data) {
+      if (entry && typeof entry.plan_id === 'string') {
+        next[entry.plan_id] = entry;
+      }
+    }
+    state.approvals.pending = next;
+    renderPendingApprovals();
+  } catch (err) {
+    console.warn('[dashboard] loadPendingApprovals failed', err);
+  }
+}
+
+function handleAwaitingApproval(entry) {
+  if (!entry || typeof entry.plan_id !== 'string') return;
+  state.approvals.pending[entry.plan_id] = entry;
+  // A new approval landing clears any stale decision/error display.
+  delete state.approvals.decisions[entry.plan_id];
+  delete state.approvals.errors[entry.plan_id];
+  delete state.approvals.inFlight[entry.plan_id];
+  renderPendingApprovals();
+}
+
+function handlePlanDecisionBroadcast(payload, decisionFallback) {
+  if (!payload || typeof payload.plan_id !== 'string') return;
+  const planId = payload.plan_id;
+  const decision = payload.decision || decisionFallback;
+  // Record the decision so the card briefly shows a state pill instead of
+  // popping out of existence; renderPendingApprovals removes resolved
+  // entries after a short grace window.
+  state.approvals.decisions[planId] = {
+    decision,
+    operator: payload.operator || 'api_operator',
+    timestamp: payload.timestamp || new Date().toISOString(),
+  };
+  delete state.approvals.inFlight[planId];
+  delete state.approvals.errors[planId];
+  renderPendingApprovals();
+  // Fade resolved cards out of the queue after a short window so the
+  // operator sees what just happened. Re-fetch from the source of truth
+  // afterwards so we converge with the server's view (covers cross-tab
+  // approvals, etc.).
+  setTimeout(() => {
+    delete state.approvals.pending[planId];
+    delete state.approvals.decisions[planId];
+    renderPendingApprovals();
+    loadPendingApprovals();
+  }, 4000);
+}
+
+function renderPendingApprovals() {
+  const section = document.getElementById('approvalsSection');
+  const list = document.getElementById('approvalsList');
+  const badge = document.getElementById('approvalsCountBadge');
+  if (!section || !list || !badge) return;
+
+  const plans = Object.values(state.approvals.pending);
+  // Sort newest-first so the most recent gate sits on top.
+  plans.sort((a, b) => {
+    const ta = a && a.requested_at ? new Date(a.requested_at).getTime() : 0;
+    const tb = b && b.requested_at ? new Date(b.requested_at).getTime() : 0;
+    return tb - ta;
+  });
+
+  if (plans.length === 0) {
+    section.style.display = 'none';
+    list.innerHTML = '';
+    badge.textContent = '0';
+    return;
+  }
+
+  section.style.display = '';
+  badge.textContent = String(plans.length);
+  list.innerHTML = plans.map(renderApprovalCard).join('');
+}
+
+// Recognises the rhodes-safety pre-remediation snapshot pattern from v0.4.3.
+// These should look distinctly non-destructive even though they are
+// "qm snapshot" calls; the snap name is conventionally rhodes-safety-*.
+function isSafetySnapshot(entry) {
+  if (!entry || entry.scope !== 'step') return false;
+  const action = String(entry.action || '');
+  if (!/(^|\\b)qm\\s+snapshot\\b/.test(action)) return false;
+  const params = entry.params || {};
+  const candidates = [
+    params.snapname,
+    params.snap_name,
+    params.snapshot_name,
+    params.name,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && /^rhodes-safety-/i.test(c)) return true;
+  }
+  // Also catch the snap name appearing inline in the action string
+  // (e.g. "qm snapshot 200 rhodes-safety-2026-05-13T...").
+  if (/rhodes-safety-/i.test(action)) return true;
+  return false;
+}
+
+function renderApprovalCard(entry) {
+  const planId = entry.plan_id;
+  const tier = entry.tier || 'read';
+  const action = entry.action || 'unknown action';
+  const safety = isSafetySnapshot(entry);
+  const reasoning = entry.reasoning || '';
+  const decision = state.approvals.decisions[planId];
+  const inFlight = state.approvals.inFlight[planId];
+  const err = state.approvals.errors[planId];
+
+  // Compact key:value table for params/scope. We deliberately render
+  // arbitrary params here (not the giant nested plan steps array that
+  // ApprovalGate.requestPlanApproval bundles into params.steps) — keep
+  // the panel scannable.
+  let paramsHtml = '';
+  const params = entry.params && typeof entry.params === 'object' ? entry.params : {};
+  const keys = Object.keys(params).filter(k => k !== 'steps');
+  if (keys.length > 0) {
+    let rows = '';
+    for (const k of keys) {
+      const v = params[k];
+      const display = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      rows += '<span class="pk">' + escapeHtml(k) + '</span><span class="pv">' + escapeHtml(display) + '</span>';
+    }
+    paramsHtml = '<div class="approval-params">' + rows + '</div>';
+  } else if (entry.scope === 'plan' && Array.isArray(params.steps)) {
+    paramsHtml = '<div class="approval-params"><span class="pk">steps</span><span class="pv">' + params.steps.length + ' planned</span></div>';
+  }
+
+  let footerHtml = '';
+  if (decision) {
+    const cls = decision.decision === 'approve' ? 'approved' : 'rejected';
+    const ts = decision.timestamp ? new Date(decision.timestamp).toLocaleTimeString('en-US', { hour12: false }) : '';
+    const label = decision.decision === 'approve'
+      ? 'Approved by ' + escapeHtml(decision.operator) + (ts ? ' at ' + ts : '')
+      : 'Rejected' + (decision.operator ? ' by ' + escapeHtml(decision.operator) : '') + (ts ? ' at ' + ts : '');
+    footerHtml = '<div class="approval-state-pill ' + cls + '">' + label + '</div>';
+  } else {
+    const disabledAttr = inFlight ? 'disabled' : '';
+    const approveLabel = inFlight === 'approve'
+      ? '<span class="spinner"></span> Approving…'
+      : 'Approve';
+    const rejectLabel = inFlight === 'reject'
+      ? '<span class="spinner"></span> Rejecting…'
+      : 'Reject';
+    footerHtml =
+      '<button class="approval-btn approve" ' + disabledAttr + ' onclick="submitApproval(\\'' + escapeJsString(planId) + '\\', \\'approve\\')">' + approveLabel + '</button>' +
+      '<button class="approval-btn reject" ' + disabledAttr + ' onclick="submitApproval(\\'' + escapeJsString(planId) + '\\', \\'reject\\')">' + rejectLabel + '</button>';
+    if (err) footerHtml += '<span class="approval-error">' + escapeHtml(err) + '</span>';
+  }
+
+  const tierClass = String(tier).replace(/[^a-z_]/gi, '');
+  const safetyBadge = safety
+    ? '<span class="approval-safety-badge" title="Pre-remediation snapshot — non-destructive">&#x1F6E1; Safety Snapshot</span>'
+    : '';
+  const ago = entry.requested_at ? 'requested ' + timeAgo(entry.requested_at) : '';
+
+  return '<div class="approval-card ' + (safety ? 'safety' : '') + '" data-plan-id="' + escapeHtml(planId) + '">' +
+    '<div class="approval-card-header">' +
+      '<span class="approval-action">' + escapeHtml(action) + '</span>' +
+      '<span class="approval-tier ' + tierClass + '">' + escapeHtml(String(tier)) + '</span>' +
+      safetyBadge +
+      (ago ? '<span class="approval-time">' + ago + '</span>' : '') +
+    '</div>' +
+    (reasoning ? '<div class="approval-reasoning">' + escapeHtml(reasoning) + '</div>' : '') +
+    paramsHtml +
+    '<div class="approval-card-footer">' + footerHtml + '</div>' +
+  '</div>';
+}
+
+function escapeJsString(s) {
+  return String(s).replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'");
+}
+
+async function submitApproval(planId, decision) {
+  if (!planId || (decision !== 'approve' && decision !== 'reject')) return;
+  if (state.approvals.inFlight[planId]) return;
+  state.approvals.inFlight[planId] = decision;
+  delete state.approvals.errors[planId];
+  renderPendingApprovals();
+
+  try {
+    const res = await fetch('/api/agent/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan_id: planId, decision }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = (payload && payload.error) ? payload.error : 'Approval request failed (' + res.status + ')';
+      throw new Error(msg);
+    }
+    // Optimistically record the decision; the SSE broadcast will land
+    // shortly and may overwrite with the server's canonical timestamp.
+    state.approvals.decisions[planId] = {
+      decision: payload.decision || decision,
+      operator: payload.operator || 'api_operator',
+      timestamp: payload.timestamp || new Date().toISOString(),
+    };
+    delete state.approvals.inFlight[planId];
+    renderPendingApprovals();
+  } catch (err) {
+    delete state.approvals.inFlight[planId];
+    const msg = err && err.message ? err.message : 'Approval request failed';
+    state.approvals.errors[planId] = msg;
+    renderPendingApprovals();
+    showToast(msg);
+  }
+}
+
+// ── Remediate (incident → agent prompt) ─────────────────
+
+function buildRemediatePrompt(inc) {
+  if (!inc) return '';
+  const labels = inc.labels || {};
+  const metric = inc.metric || '';
+  const name = labels.name || labels.vmid || '';
+  const vmid = labels.vmid !== undefined ? labels.vmid : '';
+  const node = labels.node || 'unknown node';
+
+  if (metric === 'vm_status' && labels.reason === 'paused_io_error') {
+    return 'Investigate VM ' + name + ' (vmid ' + vmid + ') on ' + node +
+      ' — currently in paused (io-error). Run the proxmox-storage-pause playbook to diagnose snapshot bloat, propose a remediation plan, and wait for approval before executing.';
+  }
+  if (metric === 'vm_status') {
+    return 'Investigate VM ' + name + ' on ' + node + ' — anomaly: ' + (labels.reason || metric) + '. Propose a remediation plan and wait for approval.';
+  }
+  if (metric === 'service_http_status') {
+    return 'Investigate service ' + (labels.service_name || '(unnamed)') + ' — HTTP probe failing. Run the in-VM diagnostic playbook against the target VM. Propose remediation and wait for approval.';
+  }
+  return 'Investigate the anomaly: ' + (inc.anomaly_type || 'unknown') + ' on ' + metric +
+    ' with labels ' + JSON.stringify(labels) + '. Diagnose and propose a remediation plan.';
+}
+
+async function triggerRemediate(incidentId) {
+  const inc = state.incidents.active.find(i => i.id === incidentId);
+  if (!inc) return;
+  if (state.remediate.state[incidentId] === 'pending') return;
+  state.remediate.state[incidentId] = 'pending';
+  renderActiveIncidents();
+
+  const prompt = buildRemediatePrompt(inc);
+  try {
+    const res = await fetch('/api/agent/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: prompt }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      const msg = (payload && payload.error) ? payload.error : 'Remediation request failed (' + res.status + ')';
+      throw new Error(msg);
+    }
+    state.remediate.state[incidentId] = 'done';
+    renderActiveIncidents();
+    // Pull any new pending approvals the agent just queued.
+    loadPendingApprovals();
+  } catch (err) {
+    delete state.remediate.state[incidentId];
+    const msg = err && err.message ? err.message : 'Remediation request failed';
+    showToast(msg);
+    renderActiveIncidents();
+  }
+}
+
 // ── Incidents ──────────────────────────────────────────
 
 async function loadIncidents() {
@@ -4883,6 +5507,20 @@ function renderActiveIncidents() {
     html += '<span class="incident-severity ' + inc.severity + '">' + inc.severity + '</span>';
     html += '<span class="incident-desc">' + escapeHtml(inc.description) + '</span>';
     html += '<span class="incident-status-pill ' + inc.status + '">' + inc.status + '</span>';
+
+    // Remediate button — only on open/healing incidents, not "recent"
+    // (resolved or failed). Stop propagation so clicking the button
+    // doesn't also toggle the expanded timeline beneath it.
+    const remState = state.remediate.state[inc.id];
+    html += '<span class="incident-remediate-wrap" onclick="event.stopPropagation()">';
+    if (remState === 'done') {
+      html += '<span class="incident-remediate-done">Plan requested \\u2014 check Pending Approvals above</span>';
+    } else if (remState === 'pending') {
+      html += '<button class="incident-remediate-btn" disabled>Planning\\u2026</button>';
+    } else {
+      html += '<button class="incident-remediate-btn" onclick="triggerRemediate(\\'' + inc.id + '\\')">Remediate</button>';
+    }
+    html += '</span>';
     html += '</div>';
 
     html += '<div class="incident-card-meta">';
@@ -6402,10 +7040,12 @@ setInterval(refreshShadowBanner, 30000);
 connect();
 pollCluster();
 loadIncidents();
+loadPendingApprovals();
 loadPredictions();
 setInterval(pollCluster, 10000);
 setInterval(updateGov, 5000);
-setInterval(function() { updateIncidentBadge(); renderActiveIncidents(); }, 15000); // refresh time-ago
+setInterval(function() { updateIncidentBadge(); renderActiveIncidents(); renderPendingApprovals(); }, 15000); // refresh time-ago
+setInterval(loadPendingApprovals, 10000);
 setInterval(loadPredictions, 30000);
 loadRightsizing();
 setInterval(loadRightsizing, 30000);
