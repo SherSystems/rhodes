@@ -20,7 +20,7 @@ import { getDataDir } from "../../config.js";
 import { join } from "node:path";
 import { getHTML } from "./template.js";
 import { readFileSync, existsSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, resolve } from "node:path";
 import type { HealingOrchestrator } from "../../healing/orchestrator.js";
 import type { ChaosEngine } from "../../chaos/engine.js";
 import type { MigrationAdapter } from "../../migration/adapter.js";
@@ -384,6 +384,8 @@ export class DashboardServer {
           } else if (this.isPathTraversalAttempt(path)) {
             res.writeHead(404, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Not found" }));
+          } else if (path.startsWith("/brand/")) {
+            this.serveBrandAsset(res, path);
           } else if (this.isReactStaticAssetPath(path)) {
             this.serveStaticFile(res, path);
           } else if (this.useReact && !path.startsWith("/api/")) {
@@ -485,6 +487,97 @@ export class DashboardServer {
     } catch {
       res.writeHead(404); res.end("Not found");
     }
+  }
+
+  // ── Brand Assets ──────────────────────────────────────
+  //
+  // /brand/<file> serves RHODES brand assets (logos, marks, lockups).
+  // Two-tier lookup so we ship small committable SVGs (the lockup wordmark,
+  // the mark, the favicon) inside the repo, but reach for the higher-res
+  // PNG lockups only when they're available on the host.
+  //
+  // 1. Repo-bundled SVGs live in `src/frontends/dashboard/assets/brand/`.
+  //    Resolved relative to project root so it works whether the server
+  //    is running via `tsx src/...` (dev) or `node dist/...` (prod) —
+  //    dist and src sit at the same depth under the repo root.
+  // 2. PNGs / hero lockups live in `RHODES_BRAND_DIR` (defaults to
+  //    `/home/pranav/rhodes-brand`). These are gitignored because each
+  //    PNG is ~1 MB.
+  //
+  // Path-traversal protection: each candidate is resolved to an absolute
+  // path, then we verify it sits inside the canonical brand dir before
+  // reading. `..` and `\0` requests are rejected up-front.
+  private readonly bundledBrandDir = resolve(
+    import.meta.dirname || __dirname,
+    "../../../src/frontends/dashboard/assets/brand",
+  );
+  private readonly externalBrandDir = resolve(
+    process.env.RHODES_BRAND_DIR || "/home/pranav/rhodes-brand",
+  );
+
+  private serveBrandAsset(res: ServerResponse, requestPath: string): void {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(requestPath);
+    } catch {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
+      return;
+    }
+
+    if (decoded.includes("\0") || decoded.includes("..")) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
+      return;
+    }
+
+    // Strip the `/brand/` prefix to get a relative file name like
+    // `rhodes-lockup.png` or `rhodes-favicon.svg`.
+    const fileName = decoded.replace(/^\/brand\//, "");
+    if (!fileName || fileName.startsWith("/")) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
+      return;
+    }
+
+    const ext = extname(fileName).toLowerCase();
+    const contentType = STATIC_MIME[ext];
+    if (!contentType || !contentType.startsWith("image/")) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
+      return;
+    }
+
+    // Tier 1: bundled SVG in src tree (small, committable).
+    // Tier 2: external dir for PNGs (large, host-local).
+    const candidates: Array<{ dir: string; full: string }> = [
+      { dir: this.bundledBrandDir, full: resolve(this.bundledBrandDir, fileName) },
+      { dir: this.externalBrandDir, full: resolve(this.externalBrandDir, fileName) },
+    ];
+
+    for (const c of candidates) {
+      // Canonical containment check — reject any resolved path that escapes
+      // the configured dir (defence in depth on top of the `..` filter).
+      if (!c.full.startsWith(c.dir + "/") && c.full !== c.dir) {
+        continue;
+      }
+      if (!existsSync(c.full)) continue;
+      try {
+        const data = readFileSync(c.full);
+        res.writeHead(200, {
+          "Content-Type": contentType,
+          // Brand assets change rarely; cache aggressively but allow revalidation.
+          "Cache-Control": "public, max-age=86400",
+        });
+        res.end(data);
+        return;
+      } catch {
+        // Fall through to next candidate
+      }
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
   }
 
   // ── Health & Playbooks ─────────────────────────────────

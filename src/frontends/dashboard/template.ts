@@ -11,7 +11,10 @@ export function getHTML(): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RHODES — Infrastructure Agent</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='none'%3E%3Crect width='100' height='100' rx='18' fill='%231E2328'/%3E%3Cg stroke='%234DA3F7' stroke-width='9' stroke-linejoin='miter' stroke-linecap='square' fill='none'%3E%3Cpolyline points='22,22 64,38 22,54'/%3E%3Cpolyline points='22,46 64,62 22,78'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="/brand/rhodes-favicon.svg">
+<link rel="apple-touch-icon" href="/brand/rhodes-app-icon.png">
+<link rel="mask-icon" href="/brand/rhodes-mark.svg" color="#4DA3F7">
+<meta name="theme-color" content="#1E2328">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -93,18 +96,54 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-focus); }
 
-/* ── Header ──────────────────────────────────────────── */
+/* ── Header (customer-grade brand header) ────────────── */
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
-  height: 48px;
+  padding: 20px 32px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-primary);
   position: sticky;
   top: 0;
   z-index: 50;
+  gap: 24px;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.brand-lockup-img {
+  height: 36px;
+  width: auto;
+  display: block;
+  /* Lockup PNG can be ~900 KB; prevent layout shift while it loads. */
+  min-width: 168px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.brand-mark-fallback {
+  /* Inline SVG fallback shown until the lockup PNG resolves. Matches the
+     mark.svg shape but inline so first paint is never blank. */
+  height: 36px;
+  width: 36px;
+  flex-shrink: 0;
+}
+
+.brand-tagline {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+  white-space: nowrap;
 }
 
 .logo {
@@ -125,7 +164,65 @@ body {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  flex-wrap: nowrap;
+}
+
+/* System status row (right side of header) */
+.sys-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 4px;
+  border-right: 1px solid var(--border);
+  margin-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sys-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.sys-pill.version {
+  color: var(--text-primary);
+}
+
+.sys-pill.shadow-on {
+  color: var(--green);
+  background: var(--green-muted);
+  border-color: rgba(34, 197, 94, 0.20);
+}
+
+.sys-pill.shadow-off {
+  color: var(--red);
+  background: var(--red-muted);
+  border-color: rgba(239, 68, 68, 0.20);
+}
+
+.sys-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.sys-pill .dot.pulse {
+  animation: pulse 2s ease-in-out infinite;
 }
 
 .conn-status {
@@ -152,12 +249,16 @@ body {
 }
 
 .mode-pill {
-  padding: 2px 10px;
-  border-radius: 4px;
-  font-size: 0.71rem;
+  /* Small mono rectangle (BRAND_BIBLE §3 "Status badges as small mono
+     rectangles, not pills"). 3px corner, mono font, tight tracking. */
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
 }
 
 .mode-pill.build { background: var(--blue-muted); color: var(--blue); }
@@ -1019,7 +1120,7 @@ tbody tr:last-child td {
 
 .incident-card {
   border-bottom: 1px solid var(--border-subtle);
-  padding: 14px 24px;
+  padding: 18px 24px;
   cursor: pointer;
   transition: background 0.12s;
   animation: fadeIn 0.3s ease-out;
@@ -1295,10 +1396,10 @@ tbody tr:last-child td {
   border-left: 3px solid var(--teal);
   background: var(--bg-card);
   border-radius: var(--radius);
-  padding: 12px 14px;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   animation: fadeIn 0.2s ease-out;
 }
 
@@ -1666,16 +1767,27 @@ tbody tr:last-child td {
 }
 
 .incidents-empty {
+  position: relative;
   text-align: center;
-  color: var(--text-tertiary);
-  padding: 40px 24px;
-  font-size: 0.82rem;
+  color: var(--text-secondary);
+  padding: 56px 24px;
+  font-size: 0.85rem;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+}
+
+.incidents-empty .empty-mark {
+  display: block;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 16px;
+  opacity: 0.18;
+  user-select: none;
 }
 
 .incidents-empty .empty-icon {
-  font-size: 2rem;
-  margin-bottom: 8px;
-  opacity: 0.4;
+  /* Legacy text-icon (kept for ASCII fallback paths) — hide when mark present */
+  display: none;
 }
 
 /* ── Governance / Audit ──────────────────────────────── */
@@ -3346,18 +3458,32 @@ tbody tr:last-child td {
 </div>
 
 <!-- ── Header ──────────────────────────────────────── -->
-<header class="header">
-  <div class="logo">
-    <svg width="24" height="24" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="RHODES">
-      <rect width="100" height="100" rx="18" fill="#1E2328"/>
-      <g stroke="#4DA3F7" stroke-width="9" stroke-linejoin="miter" stroke-linecap="square" fill="none">
-        <polyline points="22,22 64,38 22,54"/>
-        <polyline points="22,46 64,62 22,78"/>
+<header class="header" role="banner">
+  <div class="brand-lockup">
+    <svg class="brand-mark-fallback" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <g stroke="#4DA3F7" stroke-width="11" stroke-linejoin="miter" stroke-linecap="square">
+        <polyline points="14,12 70,32 14,52"/>
+        <polyline points="14,48 70,68 14,88"/>
       </g>
     </svg>
-    RHO<span class="brand-accent">DES</span>
+    <img class="brand-lockup-img"
+         src="/brand/rhodes-lockup.png"
+         alt="RHODES"
+         width="240" height="36"
+         decoding="async"
+         onerror="this.style.display='none'">
+    <span class="brand-tagline" aria-label="Tagline">Infrastructure, executed.</span>
   </div>
+
   <div class="header-right">
+    <div class="sys-status" id="sysStatus" aria-label="System status">
+      <span class="sys-pill version" id="sysVersion" title="RHODES version">v\u2014</span>
+      <span class="sys-pill shadow-off" id="sysShadow" title="Shadow mode (RHODES_DRY_RUN)">
+        <span class="dot"></span>SHADOW OFF
+      </span>
+      <span class="sys-pill" id="sysUptime" title="Server uptime">UP \u2014</span>
+      <span class="sys-pill" id="sysProviders" title="Connected providers">\u2014 PROVIDERS</span>
+    </div>
     <button class="cmd-k-trigger" id="cmdKTrigger" title="Command Palette">
       Ask RHODES
       <kbd>\u2318K</kbd>
@@ -3713,8 +3839,8 @@ tbody tr:last-child td {
         <div class="incidents-section-title">Active Incidents</div>
         <div id="activeIncidents">
           <div class="incidents-empty">
-            <div class="empty-icon">&#9711;</div>
-            No active incidents — all clear
+            <img class="empty-mark" src="/brand/rhodes-mark-white.svg" alt="" aria-hidden="true">
+            No active incidents — all clear.
           </div>
         </div>
       </div>
@@ -3722,8 +3848,8 @@ tbody tr:last-child td {
         <div class="incidents-section-title">Recent Incidents</div>
         <div id="recentIncidents">
           <div class="incidents-empty">
-            <div class="empty-icon">&#9711;</div>
-            No recent incidents
+            <img class="empty-mark" src="/brand/rhodes-mark-white.svg" alt="" aria-hidden="true">
+            No recent incidents.
           </div>
         </div>
       </div>
@@ -5604,7 +5730,7 @@ function renderActiveIncidents() {
   if (!el) return;
 
   if (state.incidents.active.length === 0) {
-    el.innerHTML = '<div class="incidents-empty"><div class="empty-icon">&#9711;</div>No active incidents \\u2014 all clear</div>';
+    el.innerHTML = '<div class="incidents-empty"><img class="empty-mark" src="/brand/rhodes-mark-white.svg" alt="" aria-hidden="true">No active incidents \\u2014 all clear.</div>';
     return;
   }
 
@@ -5657,7 +5783,7 @@ function renderRecentIncidents() {
   if (!el) return;
 
   if (state.incidents.recent.length === 0) {
-    el.innerHTML = '<div class="incidents-empty"><div class="empty-icon">&#9711;</div>No recent incidents</div>';
+    el.innerHTML = '<div class="incidents-empty"><img class="empty-mark" src="/brand/rhodes-mark-white.svg" alt="" aria-hidden="true">No recent incidents.</div>';
     return;
   }
 
@@ -7132,19 +7258,59 @@ refreshTopology();
   });
 })();
 
-// ── Shadow Mode Banner ─────────────────────────────────
-// Reflect /api/agent/status.shadow_mode in the top banner. We poll a
-// little aggressively at startup so operators see the banner on first
-// load; afterwards we settle into a 30s cadence.
-function refreshShadowBanner() {
-  fetch('/api/agent/status').then(function(r) { return r.json(); }).then(function(d) {
-    var b = document.getElementById('shadowModeBanner');
-    if (!b) return;
-    b.style.display = (d && d.shadow_mode) ? 'block' : 'none';
-  }).catch(function() { /* ignore — banner just stays in its last state */ });
+// ── Shadow Mode Banner + System Status pills ──────────
+// Reflect /api/agent/status.shadow_mode in the top banner, and surface the
+// version / uptime / shadow-mode / providers pills in the header. /healthz
+// is intentionally cheap (no provider fan-out) so 30 s polling is safe.
+function formatUptime(seconds) {
+  if (!seconds || seconds < 0) return '\\u2014';
+  var s = Math.floor(seconds);
+  var d = Math.floor(s / 86400);
+  var h = Math.floor((s % 86400) / 3600);
+  var m = Math.floor((s % 3600) / 60);
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  if (m > 0) return m + 'm';
+  return s + 's';
 }
-refreshShadowBanner();
-setInterval(refreshShadowBanner, 30000);
+
+function refreshSystemStatus() {
+  // /api/agent/status drives the shadow banner + shadow pill.
+  fetch('/api/agent/status').then(function(r) { return r.json(); }).then(function(d) {
+    var banner = document.getElementById('shadowModeBanner');
+    var pill = document.getElementById('sysShadow');
+    var shadow = !!(d && d.shadow_mode);
+    if (banner) banner.style.display = shadow ? 'block' : 'none';
+    if (pill) {
+      pill.classList.toggle('shadow-on', shadow);
+      pill.classList.toggle('shadow-off', !shadow);
+      pill.innerHTML = '<span class="dot' + (shadow ? ' pulse' : '') + '"></span>' + (shadow ? 'SHADOW ON' : 'SHADOW OFF');
+    }
+  }).catch(function() { /* keep last state */ });
+
+  // /api/healthz drives version + uptime; cluster summary drives providers.
+  fetch('/api/healthz').then(function(r) { return r.json(); }).then(function(d) {
+    if (!d) return;
+    var v = document.getElementById('sysVersion');
+    if (v && d.version) v.textContent = 'v' + d.version;
+    var u = document.getElementById('sysUptime');
+    if (u) u.textContent = 'UP ' + formatUptime(d.uptime_s);
+  }).catch(function() { /* keep last state */ });
+
+  fetch('/api/cluster/summary').then(function(r) { return r.json(); }).then(function(d) {
+    if (!d) return;
+    var p = document.getElementById('sysProviders');
+    if (!p) return;
+    // aggregateClusterSummary returns { providers: [...], ... } shape; count
+    // entries with a state. Fall back to top-level count fields when present.
+    var count = 0;
+    if (Array.isArray(d.providers)) count = d.providers.length;
+    else if (typeof d.provider_count === 'number') count = d.provider_count;
+    p.textContent = count + ' PROVIDER' + (count === 1 ? '' : 'S');
+  }).catch(function() { /* keep last state */ });
+}
+refreshSystemStatus();
+setInterval(refreshSystemStatus, 30000);
 
 // ── Init ───────────────────────────────────────────────
 connect();

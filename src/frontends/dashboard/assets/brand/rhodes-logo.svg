@@ -1,0 +1,7 @@
+<svg viewBox="0 0 460 100" xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="RHODES logo">
+  <g stroke="#4DA3F7" stroke-width="11" stroke-linejoin="miter" stroke-linecap="square">
+    <polyline points="14,12 70,32 14,52"/>
+    <polyline points="14,48 70,68 14,88"/>
+  </g>
+  <text x="120" y="68" font-family="'Space Grotesk', 'Inter', system-ui, sans-serif" font-size="56" font-weight="700" fill="#E6E9EC" letter-spacing="8">RHODES</text>
+</svg>
