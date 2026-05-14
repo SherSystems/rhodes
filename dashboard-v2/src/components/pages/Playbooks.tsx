@@ -1,12 +1,104 @@
 import { useEffect, useState } from "react";
 import { fetchPlaybooks, type PlaybookSummary } from "../../api/client";
 
+/* ── Per-trigger visual treatment ──────────────────────────
+ *
+ * Each trigger metric gets a distinct icon + accent so the operator can
+ * scan a wall of playbooks and immediately see "this is storage vs VM
+ * status vs HTTP probe." Colors come from the BRAND_BIBLE palette.
+ */
+type TriggerStyle = {
+  color: string;
+  bg: string;
+  icon: React.ReactElement;
+  label: string;
+};
+
+const TRIGGER_STYLES: Record<string, TriggerStyle> = {
+  node_cpu_pct: {
+    color: "var(--blue)",
+    bg: "rgba(77, 163, 247, 0.10)",
+    label: "CPU",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <rect x="3" y="3" width="10" height="10" rx="1" />
+        <rect x="6" y="6" width="4" height="4" />
+        <line x1="1" y1="6" x2="3" y2="6" /><line x1="1" y1="10" x2="3" y2="10" />
+        <line x1="13" y1="6" x2="15" y2="6" /><line x1="13" y1="10" x2="15" y2="10" />
+        <line x1="6" y1="1" x2="6" y2="3" /><line x1="10" y1="1" x2="10" y2="3" />
+        <line x1="6" y1="13" x2="6" y2="15" /><line x1="10" y1="13" x2="10" y2="15" />
+      </svg>
+    ),
+  },
+  node_mem_pct: {
+    color: "var(--amber)",
+    bg: "rgba(245, 166, 35, 0.10)",
+    label: "MEMORY",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <rect x="1" y="5" width="14" height="6" rx="0.5" />
+        <line x1="4" y1="5" x2="4" y2="11" /><line x1="8" y1="5" x2="8" y2="11" /><line x1="12" y1="5" x2="12" y2="11" />
+      </svg>
+    ),
+  },
+  node_disk_pct: {
+    color: "var(--purple)",
+    bg: "rgba(167, 139, 250, 0.10)",
+    label: "STORAGE",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <ellipse cx="8" cy="4" rx="6" ry="2" />
+        <path d="M2 4 v8 a6 2 0 0 0 12 0 V4" />
+        <path d="M2 8 a6 2 0 0 0 12 0" />
+      </svg>
+    ),
+  },
+  vm_status: {
+    color: "var(--red)",
+    bg: "rgba(239, 68, 68, 0.10)",
+    label: "VM STATUS",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <rect x="2" y="2" width="12" height="12" rx="1" />
+        <circle cx="8" cy="8" r="2" />
+      </svg>
+    ),
+  },
+  service_http_status: {
+    color: "var(--green)",
+    bg: "rgba(34, 197, 94, 0.10)",
+    label: "HTTP PROBE",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <circle cx="8" cy="8" r="6" />
+        <line x1="2" y1="8" x2="14" y2="8" />
+        <path d="M8 2 a8 8 0 0 1 0 12 a8 8 0 0 1 0 -12" />
+      </svg>
+    ),
+  },
+};
+
+const DEFAULT_STYLE: TriggerStyle = {
+  color: "var(--text-secondary)",
+  bg: "rgba(255, 255, 255, 0.06)",
+  label: "GENERIC",
+  icon: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <circle cx="8" cy="8" r="6" />
+      <line x1="8" y1="5" x2="8" y2="9" />
+      <line x1="8" y1="11" x2="8" y2="11.5" />
+    </svg>
+  ),
+};
+
+function styleFor(metric: string): TriggerStyle {
+  return TRIGGER_STYLES[metric] ?? DEFAULT_STYLE;
+}
+
 export default function Playbooks() {
   const [playbooks, setPlaybooks] = useState<PlaybookSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  // Local enabled-state overlay. Persistence lives server-side once the
-  // playbook registry exposes toggles — for now the UI tracks intent.
   const [disabledIds, setDisabledIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -25,10 +117,10 @@ export default function Playbooks() {
       }
     };
     load();
-    const id = setInterval(load, 10000);
+    const id = window.setInterval(load, 10_000);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      window.clearInterval(id);
     };
   }, []);
 
@@ -44,111 +136,92 @@ export default function Playbooks() {
   return (
     <div className="page">
       <div className="page-header">
-        <h2>Playbooks</h2>
-        <p className="page-subtitle">
-          Event classes RHODES can recognize and respond to. Toggles are local-only until the
-          registry exposes server-side persistence.
-        </p>
+        <div>
+          <h2>Playbooks</h2>
+          <p className="page-subtitle">
+            Event classes RHODES can recognize and respond to. Toggles are local-only until the
+            registry exposes server-side persistence.
+          </p>
+        </div>
       </div>
 
-      {loading && !playbooks && <div className="empty-state">Loading playbooks…</div>}
+      {loading && !playbooks && (
+        <div className="empty-state empty-state--inline">Loading playbooks…</div>
+      )}
       {error && (
-        <div className="empty-state" style={{ color: "var(--red)" }}>
+        <div className="empty-state empty-state--inline" style={{ color: "var(--red)" }}>
           Failed to load playbooks: {error}
         </div>
       )}
       {playbooks && playbooks.length === 0 && (
-        <div className="empty-state">
-          No playbooks registered. The healing orchestrator may not be wired in this mode.
+        <div className="empty-state empty-state--card">
+          <img
+            className="empty-state-mark"
+            src="/brand/rhodes-mark-white.svg"
+            alt=""
+            aria-hidden="true"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).src = "/rhodes-mark.png";
+            }}
+          />
+          <div className="empty-state-text">
+            No playbooks registered. The healing orchestrator may not be wired in this mode.
+          </div>
         </div>
       )}
 
       {playbooks && playbooks.length > 0 && (
-        <div style={{ display: "grid", gap: 8 }}>
+        <div className="playbook-grid">
           {playbooks.map((p) => {
             const disabled = disabledIds.has(p.id);
+            const style = styleFor(p.trigger.metric);
             return (
-              <div
-                key={p.id}
-                style={{
-                  padding: "14px 16px",
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 8,
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto",
-                  gap: 12,
-                  alignItems: "start",
-                  opacity: disabled ? 0.55 : 1,
-                }}
-              >
-                <div style={{ display: "grid", gap: 4, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontWeight: 600 }}>{p.name}</span>
-                    <code
-                      style={{
-                        fontSize: "0.71rem",
-                        color: "var(--text-secondary)",
-                        fontFamily: "var(--font-mono, monospace)",
-                      }}
-                    >
-                      {p.id}
-                    </code>
-                    {p.requires_approval && (
-                      <span
-                        style={{
-                          fontSize: "0.64rem",
-                          padding: "1px 6px",
-                          borderRadius: 3,
-                          background: "var(--amber-muted)",
-                          color: "var(--amber)",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.04em",
-                        }}
-                      >
-                        Approval
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>{p.description}</div>
-                  <div
-                    style={{
-                      fontSize: "0.71rem",
-                      color: "var(--text-tertiary, var(--text-secondary))",
-                      display: "flex",
-                      gap: 12,
-                      flexWrap: "wrap",
-                    }}
+              <article key={p.id} className={`playbook-card${disabled ? " is-disabled" : ""}`}>
+                <div className="playbook-card-head">
+                  <span
+                    className="playbook-card-icon"
+                    style={{ color: style.color, background: style.bg }}
                   >
-                    <span>
-                      Trigger: <code>{p.trigger.metric}</code> ({p.trigger.type}
-                      {p.trigger.severity ? `, ${p.trigger.severity}` : ""})
-                    </span>
-                    <span>Cooldown: {p.cooldown_minutes}m</span>
-                    <span>
-                      Last triggered:{" "}
-                      {p.last_triggered_at
-                        ? new Date(p.last_triggered_at).toLocaleString()
-                        : "never"}
-                    </span>
+                    {style.icon}
+                  </span>
+                  <div className="playbook-card-title-row">
+                    <span className="playbook-card-name">{p.name}</span>
+                    <code className="playbook-card-id">{p.id}</code>
                   </div>
+                  {p.requires_approval && (
+                    <span className="status-rect status-rect--approval">APPROVAL</span>
+                  )}
+                </div>
+                <div className="playbook-card-desc">{p.description}</div>
+                <div className="playbook-card-meta">
+                  <span className="status-rect" style={{ color: style.color, background: style.bg }}>
+                    {style.label}
+                  </span>
+                  <span className="playbook-card-trigger">
+                    on <code>{p.trigger.metric}</code>
+                    {p.trigger.severity ? ` · ${p.trigger.severity}` : ""}
+                  </span>
+                  <span className="playbook-card-cooldown">cooldown {p.cooldown_minutes}m</span>
+                  <span className="playbook-card-last">
+                    last:&nbsp;
+                    {p.last_triggered_at
+                      ? new Date(p.last_triggered_at).toLocaleString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "never"}
+                  </span>
                 </div>
                 <button
+                  type="button"
+                  className={`playbook-card-toggle${disabled ? " is-disabled" : ""}`}
                   onClick={() => toggle(p.id)}
-                  style={{
-                    padding: "6px 12px",
-                    border: "1px solid var(--border)",
-                    borderRadius: 6,
-                    background: disabled ? "transparent" : "var(--teal-muted)",
-                    color: disabled ? "var(--text-secondary)" : "var(--teal)",
-                    cursor: "pointer",
-                    fontSize: "0.78rem",
-                    fontWeight: 500,
-                  }}
                 >
                   {disabled ? "Disabled" : "Enabled"}
                 </button>
-              </div>
+              </article>
             );
           })}
         </div>

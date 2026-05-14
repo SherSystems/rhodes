@@ -2,6 +2,8 @@ import { useSSE } from "./hooks/useSSE";
 import { useClusterPolling, useIncidentPolling } from "./hooks/usePolling";
 import { useStore } from "./store";
 import Sidebar from "./components/layout/Sidebar";
+import Header from "./components/Header";
+import PendingApprovalsPanel from "./components/PendingApprovalsPanel";
 import Overview from "./components/pages/Overview";
 import Infrastructure from "./components/pages/Infrastructure";
 import AppTopology from "./components/AppTopology";
@@ -26,16 +28,20 @@ export function App() {
       <div className="app-layout">
         <Sidebar />
         <div className="app-content">
+          <Header />
+          <PendingApprovalsPanel />
           <main className="page-content">
-            {activeTab === "overview" && <Overview />}
-            {activeTab === "infrastructure" && <Infrastructure />}
-            {activeTab === "applications" && <AppTopology />}
-            {activeTab === "migrations" && <Migrations />}
-            {activeTab === "operations" && <Operations />}
-            {activeTab === "costs" && <Costs />}
-            {activeTab === "chaos" && <Chaos />}
-            {activeTab === "health" && <Health />}
-            {activeTab === "playbooks" && <Playbooks />}
+            <div key={activeTab} className="page-fade">
+              {activeTab === "overview" && <Overview />}
+              {activeTab === "infrastructure" && <Infrastructure />}
+              {activeTab === "applications" && <AppTopology />}
+              {activeTab === "migrations" && <Migrations />}
+              {activeTab === "operations" && <Operations />}
+              {activeTab === "costs" && <Costs />}
+              {activeTab === "chaos" && <Chaos />}
+              {activeTab === "health" && <Health />}
+              {activeTab === "playbooks" && <Playbooks />}
+            </div>
           </main>
         </div>
       </div>

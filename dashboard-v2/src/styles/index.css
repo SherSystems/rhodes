@@ -5130,3 +5130,980 @@ button, select, a, .tab, .incident-card, .incident-row, .audit-header, .audit-pl
     min-width: 560px;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════ */
+/* v0.4.6 CUSTOMER-GRADE OVERRIDES — Linear/Stripe/Vercel quality.      */
+/* Anything in this section takes precedence over earlier rules so we   */
+/* can re-skin the dashboard without touching the original definitions. */
+/* ════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Canonical BRAND_BIBLE palette — overrides the bluer earlier values. */
+  --bg-primary: #1E2328;          /* Gunmetal */
+  --bg-card: #23282F;             /* Slightly elevated */
+  --bg-elevated: #2A2F36;         /* Steel — raised surface */
+  --bg-hover: #2F353D;
+  --bg-active: #353C45;
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-focus: rgba(77, 163, 247, 0.40);  /* Rhodes Blue 40% */
+
+  --text-primary: #E6E9EC;        /* Paper */
+  --text-secondary: #8B949E;      /* Steel */
+  --text-tertiary: #6A737D;
+  --text-accent: #FFFFFF;
+
+  --rhodes-blue: #4DA3F7;
+  --rhodes-blue-muted: rgba(77, 163, 247, 0.10);
+  --rhodes-blue-ring: rgba(77, 163, 247, 0.35);
+
+  /* Keep --teal/--blue aliases so legacy classes still resolve, but
+     point them at the canonical Rhodes Blue. */
+  --teal: var(--rhodes-blue);
+  --teal-deep: #2F8AE0;
+  --teal-muted: var(--rhodes-blue-muted);
+  --teal-border: rgba(77, 163, 247, 0.20);
+  --blue: var(--rhodes-blue);
+  --blue-muted: var(--rhodes-blue-muted);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-brand: 'Syne', 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+}
+
+body {
+  background: var(--bg-primary);
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* All metrics, percentages, durations, counts use tabular-nums. */
+.status-rect, .status-rect-num,
+.approval-time, .approval-param-value, .approval-card-header-meta,
+.incident-card-meta, .incident-time-ago, .incident-row-duration,
+.playbook-card-meta, .playbook-card-id,
+.rhodes-header-status, .stat-value, .ov-stat-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+.rhodes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 28px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+.rhodes-header-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rhodes-header-lockup {
+  height: 26px;
+  width: auto;
+  display: block;
+  object-fit: contain;
+}
+
+.rhodes-header-tagline {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  line-height: 1;
+}
+
+.rhodes-header-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ── Mono rect status pills (BRAND_BIBLE §3) ────────────────────────── */
+.status-rect {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.status-rect-num {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.status-rect--version {
+  color: var(--rhodes-blue);
+  border-color: rgba(77, 163, 247, 0.22);
+  background: var(--rhodes-blue-muted);
+}
+
+.status-rect--shadow-on {
+  color: var(--green);
+  border-color: rgba(34, 197, 94, 0.30);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.status-rect--shadow-off {
+  color: var(--red);
+  border-color: rgba(239, 68, 68, 0.30);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.shadow-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.shadow-dot--on { background: var(--green); animation: shadow-pulse 1.6s ease-in-out infinite; }
+.shadow-dot--off { background: var(--red); }
+
+@keyframes shadow-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+}
+
+.status-rect--conn.is-live { color: var(--green); border-color: rgba(34, 197, 94, 0.30); }
+.status-rect--conn.is-down { color: var(--red); border-color: rgba(239, 68, 68, 0.30); }
+
+.status-rect--approval {
+  color: var(--amber);
+  border-color: rgba(245, 166, 35, 0.30);
+  background: rgba(245, 166, 35, 0.08);
+}
+
+/* Severity rects (incident pills). */
+.status-rect.severity-critical {
+  color: var(--red);
+  border-color: rgba(239, 68, 68, 0.30);
+  background: rgba(239, 68, 68, 0.08);
+}
+.status-rect.severity-warning {
+  color: var(--amber);
+  border-color: rgba(245, 166, 35, 0.30);
+  background: rgba(245, 166, 35, 0.08);
+}
+
+.status-rect.incident-status-open    { color: var(--red); border-color: rgba(239, 68, 68, 0.25); }
+.status-rect.incident-status-healing { color: var(--rhodes-blue); border-color: rgba(77, 163, 247, 0.30); animation: pulse 1.6s ease-in-out infinite; }
+.status-rect.incident-status-resolved { color: var(--green); border-color: rgba(34, 197, 94, 0.25); }
+.status-rect.incident-status-failed   { color: var(--red); border-color: rgba(239, 68, 68, 0.25); }
+
+/* Tier rects (approvals). */
+.status-rect.tier-read         { color: var(--green); border-color: rgba(34, 197, 94, 0.28); background: rgba(34, 197, 94, 0.06); }
+.status-rect.tier-safe_write   { color: var(--rhodes-blue); border-color: rgba(77, 163, 247, 0.32); background: var(--rhodes-blue-muted); }
+.status-rect.tier-risky_write  { color: var(--amber); border-color: rgba(245, 166, 35, 0.32); background: rgba(245, 166, 35, 0.06); }
+.status-rect.tier-destructive  { color: var(--red); border-color: rgba(239, 68, 68, 0.32); background: rgba(239, 68, 68, 0.06); }
+.status-rect.tier-never        { color: var(--red); border-color: rgba(239, 68, 68, 0.45); background: rgba(239, 68, 68, 0.10); }
+
+/* ── App Layout ─────────────────────────────────────────────────────── */
+.app-content {
+  margin-left: 220px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-content {
+  flex: 1;
+  padding: 32px;
+  overflow-y: auto;
+}
+
+.page-fade {
+  animation: page-fade-in 150ms ease-out;
+}
+
+@keyframes page-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Sidebar — section groups + subtle active state ────────────────── */
+.sidebar {
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-logo {
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-logo img {
+  filter: drop-shadow(0 0 0 transparent);
+}
+
+.sidebar-logo-text {
+  font-family: var(--font-brand);
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  color: var(--text-accent);
+}
+
+.sidebar-nav-group {
+  padding: 14px 0 6px 0;
+}
+
+.sidebar-nav-group + .sidebar-nav-group {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 4px;
+}
+
+.sidebar-nav-group-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  padding: 0 22px 8px;
+}
+
+.sidebar-nav-item {
+  position: relative;
+  border-left: none !important;       /* kill the legacy 2px active stripe */
+  padding: 8px 22px;
+  font-weight: 500;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.sidebar-nav-item:hover {
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-primary);
+}
+
+.sidebar-nav-item.active {
+  background: transparent;
+  color: var(--rhodes-blue);
+  font-weight: 600;
+}
+
+.sidebar-nav-item.active::after {
+  /* Subtle underline accent — replaces the heavy left-edge stripe. */
+  content: "";
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 2px;
+  height: 1.5px;
+  background: var(--rhodes-blue);
+  opacity: 0.7;
+  border-radius: 1px;
+}
+
+.sidebar-nav-badge {
+  background: var(--rhodes-blue);
+  color: #0F1418;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.sidebar-divider { display: none; }
+
+.sidebar-footer {
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Pending Approvals — floating panel above content ──────────────── */
+.pending-approvals-panel {
+  margin: 0 32px;
+  margin-top: 24px;
+  padding: 18px 20px 16px;
+  background: linear-gradient(180deg, rgba(245, 166, 35, 0.05) 0%, rgba(245, 166, 35, 0.01) 100%);
+  border: 1px solid rgba(245, 166, 35, 0.25);
+  border-radius: 10px;
+  animation: page-fade-in 250ms ease-out;
+}
+
+.pending-approvals-panel-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 12px;
+}
+
+.pending-approvals-panel-title {
+  font-family: var(--font-brand);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.pending-approvals-panel-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--amber);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+.pending-approvals-panel-count-suffix {
+  color: var(--text-tertiary);
+  margin-left: 2px;
+}
+
+.approvals-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
+}
+
+.approvals-list--compact { gap: 10px; }
+
+.approvals-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 36px 16px;
+  text-align: center;
+}
+
+.approvals-empty-mark {
+  width: 56px;
+  height: 56px;
+  opacity: 0.18;
+}
+
+.approvals-empty-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.approvals-error {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--red);
+  padding: 8px 10px;
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+
+/* ── Approval card ─────────────────────────────────────────────────── */
+.approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.approval-card:hover {
+  border-color: var(--border-focus);
+  transform: translateY(-1px);
+}
+
+.approval-card--safety {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.04) 0%, var(--bg-elevated) 100%);
+}
+
+.approval-card--safety:hover {
+  border-color: rgba(34, 197, 94, 0.7);
+}
+
+.approval-card--deep-link {
+  animation: deep-link-pulse 2s ease-out;
+  border-color: var(--rhodes-blue) !important;
+}
+
+@keyframes deep-link-pulse {
+  0%   { box-shadow: 0 0 0 0   var(--rhodes-blue-ring); }
+  50%  { box-shadow: 0 0 0 12px rgba(77, 163, 247, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(77, 163, 247, 0); }
+}
+
+.approval-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.approval-card-header-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.approval-card-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-action {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.approval-safety-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(34, 197, 94, 0.10);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.approval-safety-badge::before {
+  content: "\1F6E1";
+  margin-right: 5px;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
+}
+
+.approval-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+.approval-reasoning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  cursor: pointer;
+  width: 100%;
+  font-family: var(--font-sans);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.approval-reasoning:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.approval-reasoning-chevron {
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.approval-reasoning--expanded {
+  white-space: pre-wrap;
+}
+
+.approval-params {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 5px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+}
+
+.approval-param-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.approval-param-key {
+  color: var(--text-tertiary);
+}
+
+.approval-param-value {
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.approval-card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.approval-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 5px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.approval-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.approval-btn--approve {
+  border-color: rgba(34, 197, 94, 0.35);
+  color: var(--green);
+  background: rgba(34, 197, 94, 0.06);
+}
+
+.approval-btn--approve:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.55);
+}
+
+.approval-btn--reject {
+  border-color: rgba(239, 68, 68, 0.32);
+  color: var(--red);
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.approval-btn--reject:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.approval-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  animation: spin 0.7s linear infinite;
+}
+
+/* ── Incident card grid + Remediate button ─────────────────────────── */
+.incident-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.incidents-section-title {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  padding: 24px 0 12px;
+}
+
+.incidents-section-title:first-child { padding-top: 0; }
+
+.incident-card {
+  /* Override the legacy "row with bottom border" look. */
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: border-color 180ms ease, transform 180ms ease;
+}
+
+.incident-card:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-focus);
+  transform: translateY(-1px);
+}
+
+.incident-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.incident-desc {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: normal;
+  line-height: 1.45;
+  margin-bottom: 6px;
+}
+
+.incident-card-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+.incident-time-ago {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  margin-top: 8px;
+}
+
+.incident-remediate-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  margin-left: auto;
+  border-radius: 4px;
+  border: 1px solid rgba(77, 163, 247, 0.35);
+  background: var(--rhodes-blue-muted);
+  color: var(--rhodes-blue);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.incident-remediate-btn:hover:not(:disabled) {
+  background: rgba(77, 163, 247, 0.20);
+  border-color: rgba(77, 163, 247, 0.6);
+}
+
+.incident-remediate-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.incident-remediate-done {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  margin-left: auto;
+  border-radius: 4px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.30);
+  color: var(--green);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ── Empty states with brand watermark ─────────────────────────────── */
+.empty-state--card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 40px 16px;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.empty-state--inline {
+  padding: 18px 8px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.empty-state-mark {
+  width: 64px;
+  height: 64px;
+  opacity: 0.18;
+}
+
+.empty-state-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ── Playbook cards — grid layout with per-trigger color ───────────── */
+.playbook-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.playbook-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: border-color 180ms ease, transform 180ms ease;
+}
+
+.playbook-card:hover {
+  border-color: var(--border-focus);
+  transform: translateY(-1px);
+}
+
+.playbook-card.is-disabled {
+  opacity: 0.55;
+}
+
+.playbook-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.playbook-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.playbook-card-title-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.playbook-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
+}
+
+.playbook-card-id {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
+.playbook-card-desc {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.playbook-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+.playbook-card-trigger,
+.playbook-card-cooldown,
+.playbook-card-last {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.playbook-card-trigger code {
+  color: var(--text-primary);
+}
+
+.playbook-card-toggle {
+  align-self: flex-start;
+  margin-top: 2px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--rhodes-blue-muted);
+  color: var(--rhodes-blue);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.playbook-card-toggle.is-disabled {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.playbook-card-toggle:hover {
+  border-color: var(--border-focus);
+}
+
+/* ── Page header polish ────────────────────────────────────────────── */
+.page-header h2 {
+  font-family: var(--font-brand);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.page-subtitle {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+/* ── Phase C: kill any remaining "weird blue lines" ────────────────── */
+.ov-stat-accent {
+  /* Top accent stripes on the Overview status cards — BRAND_BIBLE prohibits.
+     Hide entirely. */
+  display: none !important;
+}
+
+.ov-provider-row {
+  border-left: none !important;        /* drop the colored left stripe */
+  padding-left: 14px !important;
+}
+
+.ov-provider-row {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px !important;
+}
+
+.prediction-card,
+.rightsizing-card,
+.toast {
+  border-left: 1px solid var(--border) !important;
+}
+
+/* Restore *just* the small status dot for prediction cards via a real
+   inline indicator (kept in place above via existing styles). */
+.prediction-card.status-healthy,
+.prediction-card.status-warning,
+.prediction-card.status-critical,
+.rightsizing-card.severity-red,
+.rightsizing-card.severity-amber,
+.rightsizing-card.severity-green {
+  border-left: 1px solid var(--border) !important;
+}
+
+/* The pipe-step gutter inherits a faded teal background via gradient — the
+   "blue line" running down the active plan list. Soften it. */
+.pipe-step.running .pipe-step-line {
+  background: linear-gradient(to bottom, rgba(77, 163, 247, 0.5) 0%, var(--border) 100%);
+}
+
+/* ── Card hover lift (general) ─────────────────────────────────────── */
+.card {
+  transition: border-color 180ms ease, transform 180ms ease;
+}
+
+.card:hover {
+  border-color: var(--border-focus);
+}
+
+/* ── Command palette polish (mono placeholder, full-width input) ───── */
+.cmd-palette-input::placeholder {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+/* ── Typography baselines ──────────────────────────────────────────── */
+h1, h2, h3, h4 {
+  font-family: var(--font-brand);
+  letter-spacing: -0.02em;
+}
+
+body, .sidebar-nav-item, .approval-btn {
+  font-family: var(--font-sans);
+}
+
+/* ── Scrollbar refresh ─────────────────────────────────────────────── */
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.10); }
+::-webkit-scrollbar-thumb:hover { background: rgba(77, 163, 247, 0.40); }
+
+/* ── Responsive: keep header tagline visible on narrower viewports ─── */
+@media (max-width: 900px) {
+  .pending-approvals-panel { margin: 16px; }
+  .page-content { padding: 20px; }
+  .rhodes-header { padding: 12px 16px; }
+  .rhodes-header-tagline { display: none; }
+}

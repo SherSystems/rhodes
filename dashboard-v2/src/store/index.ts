@@ -174,6 +174,10 @@ interface DashboardState {
   upsertPendingApproval: (entry: PendingApproval) => void;
   removePendingApproval: (planId: string) => void;
 
+  // Remediate state per incident_id: "pending" while POST in flight, "done" after.
+  remediateState: Record<string, "pending" | "done">;
+  setRemediateState: (incidentId: string, state: "pending" | "done" | null) => void;
+
   // Incidents
   activeIncidents: Incident[];
   recentIncidents: Incident[];
@@ -316,6 +320,18 @@ export const useStore = create<DashboardState>((set) => ({
     set((s) => ({
       pendingApprovals: s.pendingApprovals.filter((p) => p.plan_id !== planId),
     })),
+
+  remediateState: {},
+  setRemediateState: (incidentId, state) =>
+    set((s) => {
+      const next = { ...s.remediateState };
+      if (state === null) {
+        delete next[incidentId];
+      } else {
+        next[incidentId] = state;
+      }
+      return { remediateState: next };
+    }),
 
   activeIncidents: [],
   recentIncidents: [],

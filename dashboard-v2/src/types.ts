@@ -105,6 +105,9 @@ export interface Incident {
   description: string;
   status: "open" | "healing" | "resolved" | "failed";
   metric_name?: string;
+  metric?: string;
+  anomaly_type?: string;
+  labels?: Record<string, string | number | undefined>;
   trigger_value?: number;
   detected_at: string;
   resolved_at?: string;

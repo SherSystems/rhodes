@@ -1,11 +1,12 @@
 import { useStore } from "../store";
 import { timeAgo, formatDuration } from "../hooks/useFormatters";
+import { sendAgentCommand, fetchPendingApprovals } from "../api/client";
+import { buildRemediatePrompt } from "../lib/remediate";
 import type { Incident } from "../types";
 
 function renderTimeline(incident: Incident) {
   return (
     <div className="incident-timeline">
-      {/* Detected entry */}
       <div className="timeline-entry">
         <div className="timeline-gutter">
           <span className="timeline-dot detected" />
@@ -18,7 +19,6 @@ function renderTimeline(incident: Incident) {
         </div>
       </div>
 
-      {/* Action entries */}
       {incident.actions_taken?.map((action, idx) => (
         <div className="timeline-entry" key={idx}>
           <div className="timeline-gutter">
@@ -37,7 +37,6 @@ function renderTimeline(incident: Incident) {
         </div>
       ))}
 
-      {/* Resolved entry */}
       {incident.status === "resolved" && incident.resolved_at && (
         <div className="timeline-entry">
           <div className="timeline-gutter">
@@ -54,7 +53,6 @@ function renderTimeline(incident: Incident) {
         </div>
       )}
 
-      {/* Failed entry */}
       {incident.status === "failed" && (
         <div className="timeline-entry">
           <div className="timeline-gutter">
@@ -70,6 +68,64 @@ function renderTimeline(incident: Incident) {
   );
 }
 
+function RemediateButton({ incident }: { incident: Incident }) {
+  const remediateState = useStore((s) => s.remediateState[incident.id]);
+  const setRemediateState = useStore((s) => s.setRemediateState);
+  const setPendingApprovals = useStore((s) => s.setPendingApprovals);
+  const addToast = useStore((s) => s.addToast);
+
+  const onClick = async (e: React.MouseEvent) => {
+    // Prevent the parent card's expand/collapse handler from firing.
+    e.stopPropagation();
+    if (remediateState === "pending") return;
+    setRemediateState(incident.id, "pending");
+    const prompt = buildRemediatePrompt(incident);
+    try {
+      await sendAgentCommand(prompt);
+      setRemediateState(incident.id, "done");
+      // Refresh pending approvals so the new plan shows up immediately.
+      try {
+        const rows = await fetchPendingApprovals();
+        setPendingApprovals(rows);
+      } catch {
+        /* non-fatal — SSE / 10s poll will catch up */
+      }
+    } catch (err) {
+      setRemediateState(incident.id, null);
+      const msg = err instanceof Error ? err.message : "Remediation request failed";
+      addToast({ type: "error", title: "Remediation Failed", message: msg });
+    }
+  };
+
+  if (remediateState === "done") {
+    return (
+      <span
+        className="incident-remediate-done"
+        onClick={(e) => e.stopPropagation()}
+      >
+        Plan requested — check Pending Approvals
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="incident-remediate-btn"
+      disabled={remediateState === "pending"}
+      onClick={onClick}
+    >
+      {remediateState === "pending" ? (
+        <>
+          <span className="approval-spinner" /> Planning…
+        </>
+      ) : (
+        "Remediate"
+      )}
+    </button>
+  );
+}
+
 export default function Incidents() {
   const activeIncidents = useStore((s) => s.activeIncidents);
   const recentIncidents = useStore((s) => s.recentIncidents);
@@ -78,62 +134,71 @@ export default function Incidents() {
   const toggleIncidentExpanded = useStore((s) => s.toggleIncidentExpanded);
 
   return (
-    <div>
-      {/* Healing banners */}
+    <div className="incidents">
       {healingBanners.map((banner) => (
-        <div
-          key={banner.id}
-          className={`healing-banner ${banner.type}`}
-        >
+        <div key={banner.id} className={`healing-banner ${banner.type}`}>
           <span>{banner.type === "paused" ? "⚠" : "☠"}</span>
           <span>{banner.message}</span>
         </div>
       ))}
 
-      {/* Active Incidents */}
       <div className="incidents-section-title">Active Incidents</div>
       {activeIncidents.length === 0 ? (
-        <div className="empty-state">No active incidents</div>
+        <div className="empty-state empty-state--card">
+          <img
+            className="empty-state-mark"
+            src="/brand/rhodes-mark-white.svg"
+            alt=""
+            aria-hidden="true"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).src = "/rhodes-mark.png";
+            }}
+          />
+          <div className="empty-state-text">No active incidents — RHODES is watching.</div>
+        </div>
       ) : (
-        activeIncidents.map((incident) => (
-          <div
-            key={incident.id}
-            className="incident-card"
-            onClick={() => toggleIncidentExpanded(incident.id)}
-          >
-            <div className="incident-card-header">
-              <span className={`incident-severity ${incident.severity}`}>
-                {incident.severity === "critical" ? "CRITICAL" : "WARNING"}
-              </span>
-              <span className={`incident-status-pill ${incident.status}`}>
-                {incident.status}
-              </span>
-            </div>
-            <div className="incident-desc">{incident.description}</div>
-            {(incident.metric_name || incident.trigger_value != null) && (
-              <div className="incident-card-meta">
-                {incident.metric_name}
-                {incident.trigger_value != null && ` = ${incident.trigger_value}`}
+        <div className="incident-card-grid">
+          {activeIncidents.map((incident) => {
+            const isOpen = incident.status === "open" || incident.status === "healing";
+            return (
+              <div
+                key={incident.id}
+                className="incident-card"
+                onClick={() => toggleIncidentExpanded(incident.id)}
+              >
+                <div className="incident-card-header">
+                  <span className={`status-rect severity-${incident.severity}`}>
+                    {incident.severity === "critical" ? "CRITICAL" : "WARNING"}
+                  </span>
+                  <span className={`status-rect incident-status-${incident.status}`}>
+                    {incident.status.toUpperCase()}
+                  </span>
+                  {isOpen && <RemediateButton incident={incident} />}
+                </div>
+                <div className="incident-desc">{incident.description}</div>
+                {((incident.metric || incident.metric_name) || incident.trigger_value != null) && (
+                  <div className="incident-card-meta">
+                    {incident.metric || incident.metric_name}
+                    {incident.trigger_value != null && ` = ${incident.trigger_value}`}
+                  </div>
+                )}
+                {incident.status === "healing" && incident.playbook_name && (
+                  <div className="incident-playbook">
+                    <span className="spinner" />
+                    {incident.playbook_name}
+                  </div>
+                )}
+                <div className="incident-time-ago">{timeAgo(incident.detected_at)}</div>
+                {expandedIncidents[incident.id] && renderTimeline(incident)}
               </div>
-            )}
-            {incident.status === "healing" && incident.playbook_name && (
-              <div className="incident-playbook">
-                <span className="spinner" />
-                {incident.playbook_name}
-              </div>
-            )}
-            <div className="incident-time-ago">
-              {timeAgo(incident.detected_at)}
-            </div>
-            {expandedIncidents[incident.id] && renderTimeline(incident)}
-          </div>
-        ))
+            );
+          })}
+        </div>
       )}
 
-      {/* Recent Incidents */}
       <div className="incidents-section-title">Recent Incidents</div>
       {recentIncidents.length === 0 ? (
-        <div className="empty-state">No recent incidents</div>
+        <div className="empty-state empty-state--inline">No recent incidents.</div>
       ) : (
         recentIncidents.map((incident) => (
           <div
@@ -152,9 +217,7 @@ export default function Incidents() {
               </span>
             )}
             {incident.resolution && (
-              <span className="incident-row-resolution">
-                {incident.resolution}
-              </span>
+              <span className="incident-row-resolution">{incident.resolution}</span>
             )}
             <span
               className={`incident-row-result ${
