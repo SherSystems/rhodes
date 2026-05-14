@@ -89,14 +89,30 @@ export function formatPlanGenerated(p: PlanSummary, dashboardUrl?: string): Aler
   };
 }
 
+/**
+ * Build a dashboard deep-link URL for a given plan id.
+ *
+ * The dashboard renders its Pending Approvals panel on the home page and
+ * scrolls/highlights the matching card when it sees a `?plan=<id>` query
+ * string on page load. We append the query to whatever base URL the
+ * operator configured (commonly something like `http://100.73.129.96:7412`
+ * on the NUC), normalising any trailing slash so the resulting URL is
+ * always `<base>/?plan=<id>`.
+ */
+export function buildPlanDeepLink(dashboardUrl: string, planId: string): string {
+  const trimmed = dashboardUrl.replace(/\/+$/, "");
+  return `${trimmed}/?plan=${encodeURIComponent(planId)}`;
+}
+
 export function formatApprovalNeeded(ctx: ApprovalContext): Alert {
   const lines = [
     `${PREFIX} — approval needed`,
     `Action: ${ctx.action} [${ctx.tier}]`,
   ];
   if (ctx.description) lines.push(ctx.description);
-  if (ctx.dashboardUrl) {
-    lines.push(`Approve via dashboard: ${ctx.dashboardUrl}/plans/${ctx.planId}`);
+  const deepLink = ctx.dashboardUrl ? buildPlanDeepLink(ctx.dashboardUrl, ctx.planId) : undefined;
+  if (deepLink) {
+    lines.push(`Approve at: ${deepLink}`);
   } else {
     lines.push(`Plan: ${ctx.planId}`);
   }
@@ -106,7 +122,7 @@ export function formatApprovalNeeded(ctx: ApprovalContext): Alert {
     body: lines.join("\n"),
     timestamp: new Date().toISOString(),
     context: { plan_id: ctx.planId, action: ctx.action, tier: ctx.tier },
-    link: ctx.dashboardUrl ? `${ctx.dashboardUrl}/plans/${ctx.planId}` : undefined,
+    link: deepLink,
   };
 }
 

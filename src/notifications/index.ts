@@ -23,6 +23,7 @@ export {
   formatApprovalNeeded,
   formatExecutionOutcome,
   formatHealthCheckFailure,
+  buildPlanDeepLink,
   type AutopilotEventContext,
   type ApprovalContext,
   type ExecutionOutcomeContext,

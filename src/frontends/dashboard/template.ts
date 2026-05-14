@@ -1308,6 +1308,17 @@ tbody tr:last-child td {
   opacity: 0.92;
 }
 
+/* Telegram deep-link arrival: brief ring pulse around the target card. */
+@keyframes deepLinkPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(77, 163, 247, 0.55); }
+  50%  { box-shadow: 0 0 0 6px rgba(77, 163, 247, 0.18); }
+  100% { box-shadow: 0 0 0 0 rgba(77, 163, 247, 0.00); }
+}
+
+.approval-card.deep-link-highlight {
+  animation: deepLinkPulse 2s ease-out 1;
+}
+
 .approval-card-header {
   display: flex;
   align-items: center;
@@ -5142,6 +5153,105 @@ function renderPendingApprovals() {
   section.style.display = '';
   badge.textContent = String(plans.length);
   list.innerHTML = plans.map(renderApprovalCard).join('');
+  // Apply any pending Telegram deep-link target now that the cards
+  // have re-rendered (the operator may have clicked the link before
+  // the SSE delivered the awaiting_approval entry, so this gets a
+  // second chance on every render).
+  try { applyApprovalDeepLink(); } catch (err) { console.warn('[dashboard] deep-link', err); }
+}
+
+// ── Telegram deep-link (?plan=<id>) ───────────────────────
+// When RHODES sends an approval-pending alert via Supra/Telegram, the
+// message includes an "Approve at: <dashboard>/?plan=<id>" deep link.
+// On page load and on each Pending Approvals re-render we look for the
+// matching card and scroll/highlight it. If the plan is no longer in
+// the pending set we fall back to /api/audit to surface what happened.
+
+// Read the deep-link target once and remember it across renders so the
+// highlight pulse fires even if the SSE event for the plan arrives a
+// moment after the operator opened the dashboard. Cleared after the
+// pulse fires (or after we resolve the plan as already-decided) so it
+// doesn't keep re-applying on every subsequent re-render.
+let deepLinkPlanId = (function readDeepLinkPlanId() {
+  try {
+    return new URLSearchParams(window.location.search).get('plan');
+  } catch { return null; }
+})();
+let deepLinkResolved = false;
+
+function applyApprovalDeepLink() {
+  if (!deepLinkPlanId || deepLinkResolved) return;
+  const list = document.getElementById('approvalsList');
+  if (!list) return;
+  const escaped = (typeof CSS !== 'undefined' && CSS.escape)
+    ? CSS.escape(deepLinkPlanId)
+    : String(deepLinkPlanId).replace(/[^a-zA-Z0-9_-]/g, '');
+  const card = list.querySelector('[data-plan-id="' + escaped + '"]');
+  if (card) {
+    deepLinkResolved = true;
+    try {
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch {
+      card.scrollIntoView();
+    }
+    // Restart the animation by re-toggling the class.
+    card.classList.remove('deep-link-highlight');
+    void card.offsetWidth;
+    card.classList.add('deep-link-highlight');
+    setTimeout(() => { card.classList.remove('deep-link-highlight'); }, 2200);
+    return;
+  }
+  // Card not found — could be (a) SSE hasn't delivered the awaiting_approval
+  // entry yet, or (b) the plan was already decided before the operator
+  // tapped the link. Distinguish by asking the audit log; only show a toast
+  // and stop retrying once we have a definitive resolved state.
+  resolveDeepLinkAgainstAudit();
+}
+
+let deepLinkAuditInFlight = false;
+async function resolveDeepLinkAgainstAudit() {
+  if (deepLinkAuditInFlight || !deepLinkPlanId || deepLinkResolved) return;
+  deepLinkAuditInFlight = true;
+  try {
+    // Pending — if the entry shows up here we just wait for renderPendingApprovals
+    // to call us again; don't toast and don't mark resolved.
+    const pending = await fetch('/api/agent/pending-approvals').then(r => r.ok ? r.json() : []);
+    if (Array.isArray(pending) && pending.some(p => p && p.plan_id === deepLinkPlanId)) return;
+    // Not pending — look for a terminal entry in the audit log.
+    const auditUrl = '/api/audit?limit=200';
+    const entries = await fetch(auditUrl).then(r => r.ok ? r.json() : []);
+    const decided = Array.isArray(entries)
+      ? entries.find(e => e && e.plan_id === deepLinkPlanId && (e.approval || e.result === 'blocked' || e.result === 'failed' || e.result === 'success' || e.result === 'rolled_back'))
+      : null;
+    if (decided) {
+      let state = 'resolved';
+      if (decided.approval && typeof decided.approval.approved === 'boolean') {
+        state = decided.approval.approved ? 'approved' : 'rejected';
+      } else if (decided.result === 'blocked') {
+        state = 'rejected';
+      } else if (decided.result === 'success') {
+        state = 'approved';
+      } else if (decided.result === 'rolled_back' || decided.result === 'failed') {
+        state = decided.result.replace('_', ' ');
+      }
+      showToast('Plan ' + deepLinkPlanId + ' has been ' + state + '.');
+      deepLinkResolved = true;
+    }
+    // If not found anywhere yet, leave deepLinkResolved=false and let the
+    // next render re-attempt (covers the late-SSE case).
+  } catch (err) {
+    console.warn('[dashboard] audit lookup failed for deep-link', err);
+  } finally {
+    deepLinkAuditInFlight = false;
+  }
+}
+
+// Initial pass on page load, in case the pending-approvals panel has
+// already rendered (or never will, because the plan is already decided).
+if (typeof window !== 'undefined') {
+  window.addEventListener('DOMContentLoaded', () => {
+    try { applyApprovalDeepLink(); } catch (err) { console.warn('[dashboard] deep-link', err); }
+  });
 }
 
 // Recognises the rhodes-safety pre-remediation snapshot pattern from v0.4.3.
