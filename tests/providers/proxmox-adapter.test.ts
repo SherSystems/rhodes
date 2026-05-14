@@ -83,6 +83,8 @@ vi.mock("../../src/providers/proxmox/client.js", () => {
     shutdownVM: vi.fn().mockResolvedValue("UPID:pve1:000ABC:123:shutdown"),
     rebootVM: vi.fn().mockResolvedValue("UPID:pve1:000ABC:123:reboot"),
     resumeVM: vi.fn().mockResolvedValue("UPID:pve1:000ABC:123:resume"),
+    suspendVM: vi.fn().mockResolvedValue("UPID:pve1:000ABC:123:suspend"),
+    resetVM: vi.fn().mockResolvedValue("UPID:pve1:000ABC:123:reset"),
     createVM: vi.fn().mockResolvedValue("UPID:pve1:000ABC:123:create"),
     createCT: vi.fn().mockResolvedValue("UPID:pve1:000ABC:123:create"),
     deleteVM: vi.fn().mockResolvedValue("UPID:pve1:000ABC:123:delete"),
@@ -210,6 +212,46 @@ describe("ProxmoxAdapter", () => {
       const tool = adapter.getTools().find(t => t.name === "delete_snapshot");
       expect(tool).toBeDefined();
       expect(tool!.tier).toBe("destructive");
+    });
+
+    // ── Typed lifecycle tools — see prompts.ts hard rule #11. ────
+    // These five names are explicitly referenced in the planner
+    // system prompt, so if any one is renamed or dropped, the
+    // prompt's "use the dedicated Proxmox provider tools" rule
+    // goes stale and the LLM falls back to `ssh_exec qm`.
+    it("exposes the full set of typed VM lifecycle tools so the planner can pick them over ssh_exec qm", () => {
+      const names = new Set(adapter.getTools().map(t => t.name));
+      expect(names.has("resume_vm")).toBe(true);
+      expect(names.has("start_vm")).toBe(true);
+      expect(names.has("stop_vm")).toBe(true);
+      expect(names.has("reboot_vm")).toBe(true);
+      expect(names.has("suspend_vm")).toBe(true);
+      expect(names.has("reset_vm")).toBe(true);
+    });
+
+    it("lifecycle tool descriptions steer the LLM away from ssh_exec qm", () => {
+      const lifecycle = ["resume_vm", "start_vm", "stop_vm", "reboot_vm", "suspend_vm", "reset_vm"];
+      for (const name of lifecycle) {
+        const t = adapter.getTools().find(x => x.name === name);
+        expect(t, `${name} should be registered`).toBeDefined();
+        // Each lifecycle tool description should explicitly mention
+        // the ssh_exec qm equivalent so the planner sees, in-context,
+        // that the typed tool is the preferred path.
+        expect(t!.description.toLowerCase()).toContain("ssh_exec");
+      }
+    });
+
+    it("suspend_vm and reset_vm dispatch to the Proxmox API client (not ssh_exec)", async () => {
+      const mockClient = await getMockClient();
+      await adapter.connect();
+
+      const suspendResult = await adapter.execute("suspend_vm", { node: "pve1", vmid: 200 });
+      expect(suspendResult.success).toBe(true);
+      expect(mockClient.suspendVM).toHaveBeenCalledWith("pve1", 200);
+
+      const resetResult = await adapter.execute("reset_vm", { node: "pve1", vmid: 200 });
+      expect(resetResult.success).toBe(true);
+      expect(mockClient.resetVM).toHaveBeenCalledWith("pve1", 200);
     });
   });
 

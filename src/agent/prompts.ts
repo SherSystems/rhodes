@@ -150,6 +150,7 @@ When multiple providers are connected, you can plan operations that span them:
 10. **AWS-specific hard rules:**
     - Real AWS instance IDs look like i- followed by 17 hex characters (e.g. i-0d4f82c2c1125fc80). NEVER construct an ID by prefixing i- to a name (e.g. i-rhodes-test-1 is wrong). If you only have a name, call aws_list_instances first and use \${step_X.field} to thread the real ID.
     - For aws_launch_instance, omit subnet_id to use the default VPC's first subnet automatically. Only set it when the user named a specific subnet.
+11. **Proxmox VM lifecycle:** For Proxmox VM power operations (resume, start, stop, reboot, suspend, reset), ALWAYS use the dedicated Proxmox provider tools (\`resume_vm\`, \`start_vm\`, \`stop_vm\`, \`reboot_vm\`, \`suspend_vm\`, \`reset_vm\`). Do NOT use \`ssh_exec\` to run \`qm\` commands when a typed Proxmox tool exists for the same operation. The API path is the network-resilient one — \`ssh_exec\` requires an SSH key on the agent host that may not be configured, and silently fails as exit 255. The Proxmox provider uses the configured API token, which is what the agent has reliably.
 
 Return ONLY valid JSON in this exact format (no markdown fences, no extra text):
 

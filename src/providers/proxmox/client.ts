@@ -589,6 +589,30 @@ export class ProxmoxClient {
     );
   }
 
+  /**
+   * Suspend a running QEMU VM (qm suspend). The guest is paused — RAM
+   * stays in memory; use {@link resumeVM} to bring it back. This is the
+   * API equivalent of `qm suspend <vmid>` and is QEMU-only.
+   */
+  async suspendVM(node: string, vmid: number): Promise<string> {
+    return this.request<string>(
+      "POST",
+      `/api2/json/nodes/${encodeURIComponent(node)}/qemu/${vmid}/status/suspend`
+    );
+  }
+
+  /**
+   * Hard-reset a QEMU VM (qm reset). Equivalent to pressing the reset
+   * button — the guest is not given a chance to flush. QEMU-only;
+   * Proxmox does not expose a reset endpoint for LXC.
+   */
+  async resetVM(node: string, vmid: number): Promise<string> {
+    return this.request<string>(
+      "POST",
+      `/api2/json/nodes/${encodeURIComponent(node)}/qemu/${vmid}/status/reset`
+    );
+  }
+
   // ── CRUD ────────────────────────────────────────────────
 
   async createVM(params: CreateVMParams): Promise<string> {

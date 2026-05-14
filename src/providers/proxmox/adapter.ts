@@ -134,10 +134,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 
   // ── Safe Write Tools ──────────────────────────────────────
 
-  tool("start_vm", "Start a stopped VM or container", "safe_write", [
-    nodeParam,
-    vmidParam,
-  ], "string"),
+  tool(
+    "start_vm",
+    "Start a stopped Proxmox VM or container via the Proxmox API. Prefer this over `ssh_exec qm start` — the API path uses the configured token and does not depend on an SSH key being installed on the agent host.",
+    "safe_write",
+    [nodeParam, vmidParam],
+    "string"
+  ),
 
   tool("create_snapshot", "Create a snapshot of a VM or container", "safe_write", [
     nodeParam,
@@ -147,10 +150,21 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     param("vmstate", "boolean", false, "Include VM RAM state", false),
   ], "string"),
 
-  tool("resume_vm", "Resume a paused VM", "safe_write", [
-    nodeParam,
-    vmidParam,
-  ], "string"),
+  tool(
+    "resume_vm",
+    "Resume a paused/suspended Proxmox QEMU VM via the Proxmox API (equivalent to `qm resume`). Prefer this over `ssh_exec qm resume` — the API path uses the configured token and works even when the agent host has no SSH key to the Proxmox node (the common failure mode on fresh NUCs / jump-box setups).",
+    "safe_write",
+    [nodeParam, vmidParam],
+    "string"
+  ),
+
+  tool(
+    "suspend_vm",
+    "Suspend a running Proxmox QEMU VM via the Proxmox API (equivalent to `qm suspend`). Guest RAM stays in memory; pair with `resume_vm` to bring it back. Prefer this over `ssh_exec qm suspend`.",
+    "safe_write",
+    [nodeParam, vmidParam],
+    "string"
+  ),
 
   // ── Risky Write Tools ─────────────────────────────────────
 
@@ -205,21 +219,41 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     param("description", "string", false, "Description for the clone"),
   ], "string"),
 
-  tool("stop_vm", "Force-stop a VM or container (immediate power off)", "risky_write", [
-    nodeParam,
-    vmidParam,
-  ], "string"),
+  tool(
+    "stop_vm",
+    "Force-stop a Proxmox VM or container via the Proxmox API (immediate power off — equivalent to `qm stop`). Prefer this over `ssh_exec qm stop`.",
+    "risky_write",
+    [nodeParam, vmidParam],
+    "string"
+  ),
 
-  tool("shutdown_vm", "Gracefully shut down a VM or container via ACPI", "risky_write", [
-    nodeParam,
-    vmidParam,
-    param("timeout", "number", false, "Shutdown timeout in seconds"),
-  ], "string"),
+  tool(
+    "shutdown_vm",
+    "Gracefully shut down a Proxmox VM or container via ACPI through the Proxmox API (equivalent to `qm shutdown`). Prefer this over `ssh_exec qm shutdown`.",
+    "risky_write",
+    [
+      nodeParam,
+      vmidParam,
+      param("timeout", "number", false, "Shutdown timeout in seconds"),
+    ],
+    "string"
+  ),
 
-  tool("reboot_vm", "Reboot a VM or container", "risky_write", [
-    nodeParam,
-    vmidParam,
-  ], "string"),
+  tool(
+    "reboot_vm",
+    "Reboot a Proxmox VM or container via the Proxmox API (equivalent to `qm reboot`). Prefer this over `ssh_exec qm reboot`.",
+    "risky_write",
+    [nodeParam, vmidParam],
+    "string"
+  ),
+
+  tool(
+    "reset_vm",
+    "Hard-reset a Proxmox QEMU VM via the Proxmox API (equivalent to `qm reset`). Guest is not given a chance to flush. Prefer this over `ssh_exec qm reset`. QEMU-only (Proxmox does not expose reset for LXC).",
+    "risky_write",
+    [nodeParam, vmidParam],
+    "string"
+  ),
 
   tool("update_vm_config", "Update configuration of a VM or container", "risky_write", [
     nodeParam,
@@ -457,6 +491,9 @@ export class ProxmoxAdapter implements InfraAdapter {
       case "resume_vm":
         return this.client.resumeVM(p.node as string, p.vmid as number);
 
+      case "suspend_vm":
+        return this.client.suspendVM(p.node as string, p.vmid as number);
+
       // ── Risky Write ─────────────────────────────────────
       case "create_vm":
         return this.client.createVM({
@@ -524,6 +561,9 @@ export class ProxmoxAdapter implements InfraAdapter {
 
       case "reboot_vm":
         return this.client.rebootVM(p.node as string, p.vmid as number);
+
+      case "reset_vm":
+        return this.client.resetVM(p.node as string, p.vmid as number);
 
       case "update_vm_config":
         return this.client.updateVMConfig(

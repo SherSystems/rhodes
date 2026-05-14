@@ -34,6 +34,30 @@ describe("PLANNER_PROMPT", () => {
     expect(result).toContain("No cluster state available.");
     expect(result).toContain("No prior memory.");
   });
+
+  it("includes the Proxmox VM lifecycle hard rule that steers the planner to typed tools over ssh_exec qm", () => {
+    // Background: tonight RHODES picked `ssh_exec qm resume 200` over the
+    // typed `resume_vm` tool, SSH had no key, and the recovery stalled.
+    // The rule below should keep the planner on the API path even when
+    // an SSH tool is registered alongside the Proxmox provider.
+    const result = PLANNER_PROMPT({
+      toolDescriptions: "tool: resume_vm — resume a paused Proxmox VM\ntool: ssh_exec — run a shell command",
+      clusterStateSummary: "",
+      memoryContext: "",
+    });
+
+    expect(result).toContain("Proxmox VM lifecycle");
+    expect(result).toContain("resume_vm");
+    expect(result).toContain("start_vm");
+    expect(result).toContain("stop_vm");
+    expect(result).toContain("reboot_vm");
+    expect(result).toContain("suspend_vm");
+    expect(result).toContain("reset_vm");
+    // The crucial steering: never use ssh_exec when a typed tool exists.
+    expect(result).toContain("Do NOT use `ssh_exec`");
+    expect(result).toContain("exit 255");
+    expect(result).toContain("API token");
+  });
 });
 
 describe("REPLANNER_PROMPT", () => {
