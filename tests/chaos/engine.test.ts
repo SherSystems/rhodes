@@ -232,7 +232,7 @@ describe("ChaosEngine lifecycle and regression coverage", () => {
     expect(failureEvent?.[0].data.error).toContain("injection failed");
   });
 
-  it("prefixes recommendation when approval-required scenario risk is high", async () => {
+  it("rejects high-risk approval-required scenarios when no approval gate is wired (security X-1, fail-safe)", async () => {
     const stressed = makeCluster([
       makeVm(101, { name: "db-primary", status: "running", node: "node-1" }),
       makeVm(102, { name: "api-gateway", status: "running", node: "node-1" }),
@@ -252,15 +252,20 @@ describe("ChaosEngine lifecycle and regression coverage", () => {
       uptime_s: 1000,
     });
 
-    const { engine } = makeEngine({
+    const { engine, execute } = makeEngine({
       clusterStateSequence: [stressed, stressed, stressed],
     });
     vi.spyOn(engine as any, "sleep").mockResolvedValue(undefined);
 
     const run = await engine.execute("node_drain", { node: "node-1" });
 
+    // Risk crosses the default 70 threshold.
     expect(run.simulation.risk_score).toBeGreaterThan(70);
-    expect(run.simulation.recommendation).toContain("[BLOCKED] Risk score");
+    // Recommendation flags approval, not just a cosmetic "[BLOCKED]".
+    expect(run.simulation.recommendation).toContain("[APPROVAL REQUIRED]");
+    // With no approval gate wired, the engine fails safe — no execution.
+    expect(run.status).toBe("rejected");
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("returns unrecovered VMs when recovery times out", async () => {

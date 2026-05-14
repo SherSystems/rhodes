@@ -309,6 +309,16 @@ export enum AgentEventType {
   ChaosRecoveryDetected = "chaos_recovery_detected",
   ChaosCompleted = "chaos_completed",
   ChaosFailed = "chaos_failed",
+  /** Operator approved a high-risk chaos scenario via the approval gate. */
+  ChaosApproved = "chaos_approved",
+  /** Operator rejected a high-risk chaos scenario; execution did NOT run. */
+  ChaosRejected = "chaos_rejected",
+  /** Approval window elapsed without a decision; treated as reject. */
+  ChaosApprovalTimeout = "chaos_approval_timeout",
+  /** Scenario matched the hardcoded NEVER list and was unconditionally blocked. */
+  ChaosBlocked = "chaos_blocked",
+  /** Structured per-run audit record (always emitted, regardless of outcome). */
+  ChaosAudited = "chaos_audited",
   IncidentRca = "incident_rca",
   MultiProviderGoalStarted = "multi_provider_goal_started",
   MultiProviderGoalCompleted = "multi_provider_goal_completed",

@@ -39,6 +39,13 @@ const DEFAULT_EMIT_ON: ReadonlyArray<AgentEventType> = [
   "autopilot_rule_fired" as AgentEventType,
   "probe_failed" as AgentEventType,
   "provider_unreachable" as AgentEventType,
+  // Chaos gate decisions — surface every gate event so the operator
+  // sees blocked/approved/rejected/timed-out runs alongside incidents.
+  "chaos_approved" as AgentEventType,
+  "chaos_rejected" as AgentEventType,
+  "chaos_approval_timeout" as AgentEventType,
+  "chaos_blocked" as AgentEventType,
+  "chaos_audited" as AgentEventType,
 ];
 
 /**
@@ -139,6 +146,42 @@ function renderAlertForEvent(
         ]
           .filter((x): x is string => Boolean(x))
           .join("\n"),
+        timestamp: event.timestamp,
+        context: data,
+      };
+    }
+    case "chaos_blocked":
+    case "chaos_approved":
+    case "chaos_rejected":
+    case "chaos_approval_timeout":
+    case "chaos_audited": {
+      const verb =
+        event.type === "chaos_blocked"
+          ? "BLOCKED (NEVER list)"
+          : event.type === "chaos_approved"
+            ? "approved"
+            : event.type === "chaos_rejected"
+              ? "rejected"
+              : event.type === "chaos_approval_timeout"
+                ? "approval timed out"
+                : "audited";
+      const lines = [
+        `RHODES — chaos ${verb}`,
+        `Scenario: ${String(data.scenario ?? data.scenario_id ?? "unknown")}`,
+      ];
+      if (data.risk_score !== undefined) {
+        lines.push(`Risk: ${String(data.risk_score)}/100`);
+      }
+      if (data.approval_decision) {
+        lines.push(`Approval: ${String(data.approval_decision)}`);
+      }
+      if (data.reason) lines.push(`Reason: ${String(data.reason)}`);
+      return {
+        kind: event.type === "chaos_rejected" || event.type === "chaos_blocked"
+          ? "execution_failed"
+          : "event",
+        title: `RHODES chaos ${verb}`,
+        body: lines.join("\n"),
         timestamp: event.timestamp,
         context: data,
       };

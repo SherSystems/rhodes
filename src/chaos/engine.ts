@@ -9,8 +9,9 @@ import type { EventBus } from "../agent/events.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { HealingOrchestrator } from "../healing/orchestrator.js";
 import type { Incident } from "../healing/incidents.js";
+import type { ApprovalGate } from "../governance/approval.js";
 import { AgentEventType } from "../types.js";
-import type { VMInfo, ClusterState } from "../types.js";
+import type { ApprovalRequest, VMInfo, ClusterState } from "../types.js";
 import type { ChaosScenario, ChaosAction } from "./scenarios.js";
 import { getScenario, getAllScenarios } from "./scenarios.js";
 
@@ -36,13 +37,26 @@ export interface ChaosRun {
   status:
     | "pending"
     | "simulating"
+    | "awaiting_approval"
     | "executing"
     | "recovering"
     | "verifying"
     | "completed"
-    | "failed";
+    | "failed"
+    | "rejected"
+    | "blocked";
   started_at: string;
   completed_at?: string;
+
+  /** Populated when the run goes through (or skips) the approval gate. */
+  approval?: {
+    required: boolean;
+    threshold: number;
+    decision: "approved" | "rejected" | "timeout" | "blocked" | "not_required";
+    decided_at?: string;
+    operator?: string;
+    plan_id?: string;
+  };
 
   /** Simulation results (computed before execution) */
   simulation: {
@@ -73,6 +87,29 @@ export interface ChaosEngineOptions {
   toolRegistry: ToolRegistry;
   eventBus: EventBus;
   healingOrchestrator: HealingOrchestrator;
+  /**
+   * Approval gate wired in so high-risk chaos scenarios actually stop
+   * and wait for an operator decision instead of just updating a
+   * recommendation string. When absent, the engine still enforces the
+   * NEVER list and the risk threshold, but treats the missing gate as
+   * an auto-reject (fail-safe, never fail-open).
+   *
+   * See docs/audits/security-2026-05-14.md (Finding X-1).
+   */
+  approvalGate?: ApprovalGate;
+  /**
+   * Risk-score threshold above which approval is required (assuming the
+   * scenario sets `requires_approval`). Overrides
+   * `RHODES_CHAOS_APPROVAL_RISK_THRESHOLD`. Set to 0 to require approval
+   * for any approval-flagged scenario regardless of risk.
+   */
+  approvalRiskThreshold?: number;
+  /**
+   * Maximum time (ms) to wait for an approval decision before treating
+   * it as a rejection. Defaults to 5 minutes. Override via
+   * `RHODES_CHAOS_APPROVAL_TIMEOUT_MS`.
+   */
+  approvalTimeoutMs?: number;
 }
 
 // ── Constants ───────────────────────────────────────────────
@@ -89,6 +126,41 @@ const RECOVERY_POLL_MS = 5_000;
 /** Default predicted recovery time when no historical data exists */
 const DEFAULT_PREDICTED_RECOVERY_S = 60;
 
+// ── Approval Gate Constants ─────────────────────────────────
+
+/** Default risk-score threshold (>) that demands approval. */
+const DEFAULT_APPROVAL_RISK_THRESHOLD = 70;
+/** Default wait window for an approval decision before treating as reject. */
+const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Hardcoded NEVER list — scenario IDs that are unconditionally blocked,
+ * regardless of `requires_approval`, `risk_score`, env overrides, or
+ * operator approval. Matches the SSH adapter's `never` tier semantics:
+ * not approvable.
+ *
+ * Built-in scenarios today are all reversible. These IDs are reserved
+ * for any future scenario whose name literally describes a destructive
+ * primitive — they would still be rejected here even if someone added
+ * them to the registry by accident.
+ */
+const NEVER_SCENARIO_IDS: ReadonlySet<string> = new Set([
+  "vm_destroy",
+  "delete_volume",
+  "wipe_node",
+  "format_storage",
+]);
+
+/**
+ * Hardcoded NEVER regex — any scenario whose id OR any action's `type`
+ * or `description` matches this pattern is unconditionally blocked.
+ * Words are matched with `\b` boundaries (case-insensitive).
+ * Intentionally narrow: only literal destruction primitives, never
+ * broader words like "kill" which legitimately apply to "stop the VM"
+ * semantics for `vm_kill` / `random_vm_kill`.
+ */
+const NEVER_ACTION_REGEX = /\b(destroy|delete|wipe|format)\b/i;
+
 // ── ChaosEngine ─────────────────────────────────────────────
 
 export class ChaosEngine {
@@ -96,6 +168,11 @@ export class ChaosEngine {
   private toolRegistry: ToolRegistry;
   private eventBus: EventBus;
   private healingOrchestrator: HealingOrchestrator;
+  private approvalGate?: ApprovalGate;
+  /** Risk threshold above which approval is required (`>`, not `>=`). */
+  private approvalRiskThreshold: number;
+  /** Wait window for an approval decision before treating as reject. */
+  private approvalTimeoutMs: number;
 
   private history: ChaosRun[] = [];
   private activeRun: ChaosRun | null = null;
@@ -105,6 +182,21 @@ export class ChaosEngine {
     this.toolRegistry = options.toolRegistry;
     this.eventBus = options.eventBus;
     this.healingOrchestrator = options.healingOrchestrator;
+    this.approvalGate = options.approvalGate;
+
+    const envThreshold = Number(process.env.RHODES_CHAOS_APPROVAL_RISK_THRESHOLD);
+    this.approvalRiskThreshold =
+      options.approvalRiskThreshold ??
+      (Number.isFinite(envThreshold) && envThreshold >= 0
+        ? envThreshold
+        : DEFAULT_APPROVAL_RISK_THRESHOLD);
+
+    const envTimeout = Number(process.env.RHODES_CHAOS_APPROVAL_TIMEOUT_MS);
+    this.approvalTimeoutMs =
+      options.approvalTimeoutMs ??
+      (Number.isFinite(envTimeout) && envTimeout > 0
+        ? envTimeout
+        : DEFAULT_APPROVAL_TIMEOUT_MS);
   }
 
   // ── Public API ──────────────────────────────────────────────
@@ -164,6 +256,15 @@ export class ChaosEngine {
    * Actually execute a chaos scenario: inject failures, then wait for
    * the healing orchestrator to detect and recover. Simulation runs
    * automatically as the first step.
+   *
+   * Approval gating (security X-1):
+   *   1. Hardcoded NEVER list rejects the run before simulation.
+   *   2. After simulate(), if `requires_approval && risk_score > threshold`
+   *      the engine awaits `approvalGate.requestApproval()` and bails out
+   *      on reject / timeout. Threshold is configurable via the
+   *      `RHODES_CHAOS_APPROVAL_RISK_THRESHOLD` env var (default 70).
+   *      A threshold of 0 means "always require approval when the
+   *      scenario flags `requires_approval`".
    */
   async execute(
     scenarioId: string,
@@ -176,13 +277,101 @@ export class ChaosEngine {
       );
     }
 
+    // Step 0: NEVER-list check — unconditional, before simulation.
+    // These scenarios are never approvable; they never even reach the gate.
+    const preScenario = this.resolveScenario(scenarioId);
+    const neverReason = this.matchesNeverList(preScenario);
+    if (neverReason) {
+      const blockedRun = this.createRun(preScenario);
+      blockedRun.status = "blocked";
+      blockedRun.completed_at = new Date().toISOString();
+      blockedRun.approval = {
+        required: false,
+        threshold: this.approvalRiskThreshold,
+        decision: "blocked",
+        decided_at: blockedRun.completed_at,
+      };
+      blockedRun.simulation.recommendation =
+        `[BLOCKED-NEVER] ${neverReason}. This scenario is unconditionally forbidden.`;
+      this.emitEvent(AgentEventType.ChaosBlocked, {
+        run_id: blockedRun.id,
+        scenario_id: preScenario.id,
+        reason: neverReason,
+        params: params ?? {},
+      });
+      this.emitAuditEvent(blockedRun, params, false);
+      this.history.push(blockedRun);
+      return blockedRun;
+    }
+
     // Step 1: Simulate to get blast radius
     const run = await this.simulate(scenarioId, params);
 
-    if (run.scenario.requires_approval && run.simulation.risk_score > 70) {
+    const requiresApproval =
+      run.scenario.requires_approval &&
+      run.simulation.risk_score > this.approvalRiskThreshold;
+
+    if (requiresApproval) {
       run.simulation.recommendation =
-        `[BLOCKED] Risk score ${run.simulation.risk_score}/100 exceeds safe threshold. ` +
+        `[APPROVAL REQUIRED] Risk score ${run.simulation.risk_score}/100 exceeds threshold ${this.approvalRiskThreshold}. ` +
         run.simulation.recommendation;
+
+      this.activeRun = run;
+      run.status = "awaiting_approval";
+
+      const decision = await this.awaitApprovalDecision(run, params);
+      if (decision.outcome !== "approved") {
+        run.status = "rejected";
+        run.completed_at = new Date().toISOString();
+        run.approval = {
+          required: true,
+          threshold: this.approvalRiskThreshold,
+          decision: decision.outcome === "timeout" ? "timeout" : "rejected",
+          decided_at: run.completed_at,
+          operator: decision.operator,
+          plan_id: decision.planId,
+        };
+        const eventType =
+          decision.outcome === "timeout"
+            ? AgentEventType.ChaosApprovalTimeout
+            : AgentEventType.ChaosRejected;
+        this.emitEvent(eventType, {
+          run_id: run.id,
+          scenario_id: run.scenario.id,
+          scenario_name: run.scenario.name,
+          risk_score: run.simulation.risk_score,
+          plan_id: decision.planId,
+          reason: decision.reason,
+          timeout_ms: this.approvalTimeoutMs,
+        });
+        this.emitAuditEvent(run, params, false);
+        this.history.push(run);
+        this.activeRun = null;
+        return run;
+      }
+
+      run.approval = {
+        required: true,
+        threshold: this.approvalRiskThreshold,
+        decision: "approved",
+        decided_at: new Date().toISOString(),
+        operator: decision.operator,
+        plan_id: decision.planId,
+      };
+      this.emitEvent(AgentEventType.ChaosApproved, {
+        run_id: run.id,
+        scenario_id: run.scenario.id,
+        scenario_name: run.scenario.name,
+        risk_score: run.simulation.risk_score,
+        plan_id: decision.planId,
+        operator: decision.operator,
+      });
+    } else {
+      run.approval = {
+        required: false,
+        threshold: this.approvalRiskThreshold,
+        decision: "not_required",
+      };
     }
 
     this.activeRun = run;
@@ -254,6 +443,7 @@ export class ChaosEngine {
         incidents_created: run.actual.incidents_created.length,
       });
 
+      this.emitAuditEvent(run, params, true);
       this.history.push(run);
       this.activeRun = null;
       return run;
@@ -268,6 +458,7 @@ export class ChaosEngine {
         error: errMsg,
       });
 
+      this.emitAuditEvent(run, params, true, errMsg);
       this.history.push(run);
       this.activeRun = null;
       throw err;
@@ -954,6 +1145,157 @@ export class ChaosEngine {
       timestamp: new Date().toISOString(),
       data,
     });
+  }
+
+  /**
+   * Emit the structured ChaosAudited record. Always fires once per run
+   * (approved, rejected, blocked, completed, or failed). This is what
+   * the dashboard audit log + the Telegram bridge surface as the
+   * single source of truth for "did this chaos test actually run?".
+   */
+  private emitAuditEvent(
+    run: ChaosRun,
+    params: Record<string, unknown> | undefined,
+    executed: boolean,
+    error?: string,
+  ): void {
+    const affected = run.simulation.blast_radius.affected_vms
+      .filter((v) => v.will_be_affected)
+      .map((v) => v.vmid);
+    const target =
+      affected.length > 0
+        ? affected
+        : params && (params.vmid !== undefined || params.node !== undefined)
+          ? (params.vmid ?? params.node)
+          : null;
+    this.emitEvent(AgentEventType.ChaosAudited, {
+      run_id: run.id,
+      scenario: run.scenario.id,
+      scenario_name: run.scenario.name,
+      severity: run.scenario.severity,
+      target,
+      params: params ?? {},
+      risk_score: run.simulation.risk_score,
+      approval_required: run.approval?.required ?? false,
+      approval_decision: run.approval?.decision ?? "not_required",
+      approval_operator: run.approval?.operator,
+      approval_plan_id: run.approval?.plan_id,
+      executed,
+      status: run.status,
+      error,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Return a human-readable reason if the scenario matches the
+   * hardcoded NEVER list, otherwise undefined. Belt-and-suspenders
+   * defense: even if `requires_approval` is misconfigured, scenarios
+   * whose id (or any action) literally names a destroy/delete/wipe/
+   * format primitive are unconditionally blocked.
+   */
+  private matchesNeverList(scenario: ChaosScenario): string | undefined {
+    if (NEVER_SCENARIO_IDS.has(scenario.id)) {
+      return `scenario "${scenario.id}" is on the hardcoded NEVER list`;
+    }
+    if (NEVER_ACTION_REGEX.test(scenario.id)) {
+      return `scenario id "${scenario.id}" matches NEVER pattern ${NEVER_ACTION_REGEX}`;
+    }
+    for (const action of scenario.actions ?? []) {
+      if (typeof action.type === "string" && NEVER_ACTION_REGEX.test(action.type)) {
+        return `action type "${action.type}" matches NEVER pattern ${NEVER_ACTION_REGEX}`;
+      }
+      if (typeof action.description === "string" && NEVER_ACTION_REGEX.test(action.description)) {
+        return `action description matches NEVER pattern ${NEVER_ACTION_REGEX}`;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Await an operator decision from the wired ApprovalGate. Returns the
+   * outcome (`approved` | `rejected` | `timeout`) plus optional operator
+   * + plan_id metadata for the audit trail.
+   *
+   * Fail-safe behaviour:
+   *   - No approval gate wired       → rejected (never fail-open).
+   *   - No decision within window    → rejected with outcome=timeout.
+   *   - Gate throws                  → rejected with the error as reason.
+   */
+  private async awaitApprovalDecision(
+    run: ChaosRun,
+    params: Record<string, unknown> | undefined,
+  ): Promise<{
+    outcome: "approved" | "rejected" | "timeout";
+    operator?: string;
+    planId?: string;
+    reason?: string;
+  }> {
+    if (!this.approvalGate) {
+      return {
+        outcome: "rejected",
+        reason:
+          "no approval gate wired — high-risk chaos scenarios cannot run without an operator decision channel",
+      };
+    }
+
+    const planId = (params?.plan_id as string | undefined) ?? `chaos:${run.id}`;
+    const request: ApprovalRequest = {
+      id: randomUUID(),
+      action: `chaos:execute:${run.scenario.id}`,
+      tier: "destructive",
+      params: {
+        scenario_id: run.scenario.id,
+        risk_score: run.simulation.risk_score,
+        total_affected: run.simulation.blast_radius.total_affected,
+        critical_services: run.simulation.blast_radius.critical_services_affected,
+        affected_vms: run.simulation.blast_radius.affected_vms
+          .filter((v) => v.will_be_affected)
+          .map((v) => ({ vmid: v.vmid, name: v.name, node: v.node })),
+        ...(params ?? {}),
+      },
+      reasoning:
+        `Chaos scenario "${run.scenario.name}" (${run.scenario.id}) risk ${run.simulation.risk_score}/100 ` +
+        `exceeds approval threshold ${this.approvalRiskThreshold}. ` +
+        run.simulation.recommendation,
+      plan_id: planId,
+      timestamp: new Date().toISOString(),
+    };
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<{ outcome: "timeout"; planId: string }>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        resolve({ outcome: "timeout", planId });
+      }, this.approvalTimeoutMs);
+    });
+
+    try {
+      const decision = await Promise.race([
+        this.approvalGate.requestApproval(request).then((response) => ({
+          outcome: response.approved ? ("approved" as const) : ("rejected" as const),
+          operator: response.approved_by,
+          planId,
+        })),
+        timeoutPromise,
+      ]);
+
+      if (decision.outcome === "timeout") {
+        return {
+          outcome: "timeout",
+          planId,
+          reason: `no decision within ${this.approvalTimeoutMs}ms`,
+        };
+      }
+      return decision;
+    } catch (err) {
+      return {
+        outcome: "rejected",
+        planId,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   }
 
   private sleep(ms: number): Promise<void> {

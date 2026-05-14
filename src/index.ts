@@ -359,6 +359,7 @@ async function main() {
         toolRegistry: registry,
         eventBus,
         healingOrchestrator: healer,
+        approvalGate: governance.approvalGate,
       });
       (dashboard as unknown as { chaosEngine: ChaosEngine }).chaosEngine = chaosEngine;
 
@@ -482,6 +483,7 @@ async function main() {
         toolRegistry: registry,
         eventBus,
         healingOrchestrator: healer,
+        approvalGate: governance.approvalGate,
       });
 
       // Expose on dashboard for API routes
@@ -541,6 +543,7 @@ async function main() {
         toolRegistry: registry,
         eventBus,
         healingOrchestrator: devHealer,
+        approvalGate: governance.approvalGate,
       });
 
       // Expose on dashboard for API routes
