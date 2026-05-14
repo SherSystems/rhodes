@@ -140,6 +140,26 @@ class HealingExecutor {
         return;
       }
 
+      // ── Multi-match: fire every playbook whose trigger matches ──
+      //
+      // v0.4.6 fix (correctness MEDIUM, trigger-collision): when two
+      // playbooks register the same trigger (e.g. jellyfin-service-probe
+      // and vm_in_guest_diagnostic both key on
+      // metric=service_http_status, type=state_change, severity=critical)
+      // we used to fire ONLY the first match — `match(anomaly)[0]`. The
+      // v0.4.4 release notes claimed the two would "fire together"; they
+      // did not. The matcher's downstream consumer was throwing away every
+      // entry past index 0.
+      //
+      // Now: collect the suggestPlaybook hint (pattern learning) plus
+      // every trigger match, dedupe by id, then fire each playbook
+      // through executeHealing independently. Each playbook respects its
+      // own cooldown_minutes (already enforced inside match() — cooled
+      // playbooks are filtered out there), requires_approval (each one
+      // escalates separately if it needs approval), and max_retries.
+      // The activeHeals concurrency limit applies in aggregate across
+      // playbooks for the same anomaly.
+      const matched = this.playbookEngine.match(anomaly);
       const suggestedId = this.incidentCoordinator.incidentManager.suggestPlaybook({
         type: anomaly.type,
         severity: anomaly.severity,
@@ -148,29 +168,58 @@ class HealingExecutor {
         value: anomaly.current_value,
         description: anomaly.message,
       });
-      const playbook = (suggestedId ? this.playbookEngine.get(suggestedId) : undefined)
-        ?? this.playbookEngine.match(anomaly)[0];
-      if (!playbook) return;
+      const suggested = suggestedId ? this.playbookEngine.get(suggestedId) : undefined;
 
-      if (playbook.requires_approval) {
-        this.emitEvent(AgentEventType.HealingEscalated, {
-          anomalyKey: key,
-          incident_id: incident.id,
-          playbook_id: playbook.id,
-          reason: `Playbook "${playbook.name}" requires approval — escalating to operator`,
-        });
-        return;
+      const candidates: Playbook[] = [];
+      const seen = new Set<string>();
+      // The learned/suggested playbook (if any) runs first so pattern
+      // learning still steers ordering, but it is NOT exclusive — every
+      // other matching playbook fires afterwards.
+      if (suggested && !seen.has(suggested.id)) {
+        candidates.push(suggested);
+        seen.add(suggested.id);
       }
+      for (const playbook of matched) {
+        if (seen.has(playbook.id)) continue;
+        candidates.push(playbook);
+        seen.add(playbook.id);
+      }
+      if (candidates.length === 0) return;
 
-      if (this.activeHeals.size >= this.config.maxConcurrentHeals) return;
-
+      // RCA runs once per incident regardless of how many playbooks fire.
       this.rcaAnalyzer.analyze(anomaly, incident, this.healthMonitor.store).catch((err) => {
         console.error(
           `[healing] RCA analysis failed for incident ${incident.id}: ${err instanceof Error ? err.message : String(err)}`,
         );
       });
 
-      await this.executeHealing(anomaly, incident, playbook, summary, key);
+      const healPromises: Promise<void>[] = [];
+      for (const playbook of candidates) {
+        // Each playbook's approval requirement is independent. An auto
+        // playbook fires while a co-triggered approval playbook escalates
+        // — operator sees both events.
+        if (playbook.requires_approval) {
+          this.emitEvent(AgentEventType.HealingEscalated, {
+            anomalyKey: key,
+            incident_id: incident.id,
+            playbook_id: playbook.id,
+            reason: `Playbook "${playbook.name}" requires approval — escalating to operator`,
+          });
+          continue;
+        }
+
+        if (this.activeHeals.size >= this.config.maxConcurrentHeals) break;
+
+        // Fire concurrently. executeHealing runs synchronously up to the
+        // agentCore.run() call where it inserts into activeHeals — so the
+        // concurrency check above sees each in-flight heal before
+        // deciding whether to start the next one for this anomaly.
+        healPromises.push(this.executeHealing(anomaly, incident, playbook, summary, key));
+      }
+
+      if (healPromises.length > 0) {
+        await Promise.all(healPromises);
+      }
     } finally {
       this.incidentCoordinator.endAnomaly(key);
     }

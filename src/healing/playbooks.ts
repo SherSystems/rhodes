@@ -85,6 +85,22 @@ export class PlaybookEngine {
     return this.playbooks.get(playbookId);
   }
 
+  /**
+   * Returns EVERY registered playbook whose trigger matches the given
+   * anomaly, minus any that are currently on cooldown.
+   *
+   * Multi-match semantics (v0.4.6 fix): when two playbooks share the same
+   * trigger — e.g. `jellyfin-service-probe` and `vm_in_guest_diagnostic`
+   * both register `metric: service_http_status, type: state_change,
+   * severity: critical` — both are returned. The downstream consumer
+   * (HealingEngine) fires each independently, each respecting its own
+   * `cooldown_minutes`, `requires_approval`, and `max_retries`.
+   *
+   * Prior behaviour: the engine took `match(anomaly)[0]` and silently
+   * dropped the rest, which made the "service restart didn't help →
+   * escalate to in-VM diagnostic" chain promised in the v0.4.4 release
+   * notes a no-op. See `tests/healing/orchestrator-trigger-collision.test.ts`.
+   */
   match(anomaly: Anomaly): Playbook[] {
     const matched: Playbook[] = [];
 

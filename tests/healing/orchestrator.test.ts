@@ -190,7 +190,12 @@ describe("HealingOrchestrator", () => {
     expect(recent[0]?.status).toBe("resolved");
   });
 
-  it("selects the first matching playbook and runs full incident lifecycle", async () => {
+  it("fires every matching playbook (v0.4.6 trigger-collision fix) and runs full incident lifecycle", async () => {
+    // Before v0.4.6 the engine took `match(anomaly)[0]` and dropped the
+    // rest, so two playbooks with the same trigger only fired one. After
+    // the fix both fire concurrently, each respecting its own approval /
+    // cooldown / max_retries. With maxConcurrentHeals=2 (test default)
+    // both pb-a and pb-b reach executeHealing.
     const orchestrator = makeOrchestrator();
     const anomaly = makeAnomaly({
       id: "anomaly-custom",
@@ -223,12 +228,16 @@ describe("HealingOrchestrator", () => {
     const summary = makeSummary();
     await (orchestrator as any).handleAnomaly(anomaly, summary);
 
-    expect(runMock).toHaveBeenCalledTimes(1);
-    const goalArg = runMock.mock.calls[0][0] as { raw_input: string };
-    expect(goalArg.raw_input).toContain('"playbook_id":"pb-a"');
+    // Both playbooks fired against the same anomaly.
+    expect(runMock).toHaveBeenCalledTimes(2);
+    const playbookIds = runMock.mock.calls.map((call) => {
+      const goal = call[0] as { raw_input: string };
+      return JSON.parse(goal.raw_input).playbook_id;
+    });
+    expect(playbookIds.sort()).toEqual(["pb-a", "pb-b"]);
 
-    expect(summary.healingsStarted).toBe(1);
-    expect(summary.healingsCompleted).toBe(1);
+    expect(summary.healingsStarted).toBe(2);
+    expect(summary.healingsCompleted).toBe(2);
     expect(summary.healingsFailed).toBe(0);
 
     const recent = orchestrator.incidentManager.getRecent(1)[0];
