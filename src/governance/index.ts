@@ -181,13 +181,19 @@ export class GovernanceEngine {
       };
     }
 
-    // 7. Request human approval
+    // 7. Request human approval. Carry the plan/step identifiers through so
+    //    the gate can scope per-step approvals by (plan_id, step_id) instead
+    //    of letting an earlier plan-level decision auto-resolve them. See
+    //    correctness audit HIGH #1 (docs/audits/correctness-2026-05-14.md).
+    const stepId = params._step_id as string | undefined;
     const approvalRequest = {
       id: randomUUID(),
       action,
       tier,
       params,
       reasoning: `Action "${action}" classified as ${tier} requires approval in ${mode} mode.`,
+      ...(planId ? { plan_id: planId } : {}),
+      ...(stepId ? { step_id: stepId } : {}),
       timestamp: new Date().toISOString(),
     };
 

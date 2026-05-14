@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security / Correctness
+
+- **HIGH: Per-step approval gates now scope decisions by `(plan_id, step_id)`** (`feature/per-step-approval-scope`). Closes correctness audit HIGH #1 and security audit H-1 from 2026-05-14: the v0.4.5 `ApprovalGate.decisions` map was keyed only by `plan_id`, so a plan-level approval auto-resolved every later per-step `requestApproval` against the same plan — defeating `policy.orchestration.approval.explicit_tiers`. The 11-step esxi-01 save from 2026-05-13 had a deliberate "approval checkpoint" before the destructive `delete_snapshot` step; under v0.4.5 that gate would have been silently auto-approved by the plan-level decision. **BREAKING (semantics, protocol minor bump):** per-step destructive gates now require their own operator confirmation. `POST /api/agent/approve` accepts an optional `step_id` field to target a specific gate; `awaiting_approval` / `plan_approved` / `plan_rejected` SSE events carry `step_id` when the gate is per-step. The dashboard panel renders per-step gates as separate cards (own `data-step-id` attribute, "step <id>" badge); the `?plan=<id>` deep-link still works and now optionally accepts `&step=<step_id>` for multi-gate plans. Plan-id-only API calls remain backward compatible — a missing `step_id` resolves the plan-level entry as before. +9 governance tests (1 dashboard SSE, 8 unit + dashboard integration). Also fixes correctness MEDIUM #3 as a side effect: two sequential per-step gates against the same plan no longer collide in `pendingResolvers`.
+
 ## [0.4.5] - 2026-05-14
 
 ### Security

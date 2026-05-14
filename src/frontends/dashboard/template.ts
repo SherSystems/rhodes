@@ -4031,15 +4031,19 @@ const state = {
   healthHistory: [],  // last 30 ClusterHealthSummary objects for sparklines
   lastHealth: null,   // most recent health_check data
   approvals: {
-    // plan_id -> PendingApprovalEntry (full row as returned by the server)
+    // approvalKey(plan_id, step_id?) -> PendingApprovalEntry (full row).
+    // Per-step gates and plan-level gates live in distinct slots so a
+    // plan-level approval does not collapse onto a destructive per-step
+    // card (correctness HIGH #1 / security H-1).
     pending: {},
-    // plan_id -> { decision, operator, timestamp } once resolved (used to
-    // briefly show a state pill in place of buttons before the card fades).
+    // approvalKey(plan_id, step_id?) -> { decision, operator, timestamp }
+    // once resolved (used to briefly show a state pill in place of
+    // buttons before the card fades).
     decisions: {},
-    // plan_id -> 'approve'|'reject' while a POST is in flight (suppresses
-    // re-clicks and surfaces a spinner).
+    // approvalKey(plan_id, step_id?) -> 'approve'|'reject' while a POST is
+    // in flight (suppresses re-clicks and surfaces a spinner).
     inFlight: {},
-    // plan_id -> error string from the last failed POST.
+    // approvalKey(plan_id, step_id?) -> error string from the last failed POST.
     errors: {},
   },
   remediate: {
@@ -5198,6 +5202,20 @@ function showToast(msg) {
 
 // ── Pending Approvals ───────────────────────────────────
 
+// Composite key for the approval state maps. Mirrors the server-side
+// approvalKey(plan_id, step_id) — plan-level gates and per-step gates
+// occupy distinct slots so a plan-level approval cannot collapse onto
+// a destructive per-step card. See correctness HIGH #1 / security H-1.
+function approvalKey(planId, stepId) {
+  if (planId === undefined || planId === null) return '';
+  return stepId ? String(planId) + '::step:' + String(stepId) : String(planId) + '::plan';
+}
+
+function entryKey(entry) {
+  if (!entry || typeof entry.plan_id !== 'string') return '';
+  return approvalKey(entry.plan_id, entry.step_id);
+}
+
 async function loadPendingApprovals() {
   try {
     const data = await fetch('/api/agent/pending-approvals').then(r => r.json());
@@ -5207,9 +5225,8 @@ async function loadPendingApprovals() {
     // local UI state that the server snapshot won't reflect.
     const next = {};
     for (const entry of data) {
-      if (entry && typeof entry.plan_id === 'string') {
-        next[entry.plan_id] = entry;
-      }
+      const k = entryKey(entry);
+      if (k) next[k] = entry;
     }
     state.approvals.pending = next;
     renderPendingApprovals();
@@ -5219,37 +5236,40 @@ async function loadPendingApprovals() {
 }
 
 function handleAwaitingApproval(entry) {
-  if (!entry || typeof entry.plan_id !== 'string') return;
-  state.approvals.pending[entry.plan_id] = entry;
+  const k = entryKey(entry);
+  if (!k) return;
+  state.approvals.pending[k] = entry;
   // A new approval landing clears any stale decision/error display.
-  delete state.approvals.decisions[entry.plan_id];
-  delete state.approvals.errors[entry.plan_id];
-  delete state.approvals.inFlight[entry.plan_id];
+  delete state.approvals.decisions[k];
+  delete state.approvals.errors[k];
+  delete state.approvals.inFlight[k];
   renderPendingApprovals();
 }
 
 function handlePlanDecisionBroadcast(payload, decisionFallback) {
   if (!payload || typeof payload.plan_id !== 'string') return;
   const planId = payload.plan_id;
+  const stepId = typeof payload.step_id === 'string' && payload.step_id.length > 0 ? payload.step_id : undefined;
+  const k = approvalKey(planId, stepId);
   const decision = payload.decision || decisionFallback;
   // Record the decision so the card briefly shows a state pill instead of
   // popping out of existence; renderPendingApprovals removes resolved
   // entries after a short grace window.
-  state.approvals.decisions[planId] = {
+  state.approvals.decisions[k] = {
     decision,
     operator: payload.operator || 'api_operator',
     timestamp: payload.timestamp || new Date().toISOString(),
   };
-  delete state.approvals.inFlight[planId];
-  delete state.approvals.errors[planId];
+  delete state.approvals.inFlight[k];
+  delete state.approvals.errors[k];
   renderPendingApprovals();
   // Fade resolved cards out of the queue after a short window so the
   // operator sees what just happened. Re-fetch from the source of truth
   // afterwards so we converge with the server's view (covers cross-tab
   // approvals, etc.).
   setTimeout(() => {
-    delete state.approvals.pending[planId];
-    delete state.approvals.decisions[planId];
+    delete state.approvals.pending[k];
+    delete state.approvals.decisions[k];
     renderPendingApprovals();
     loadPendingApprovals();
   }, 4000);
@@ -5303,16 +5323,36 @@ let deepLinkPlanId = (function readDeepLinkPlanId() {
     return new URLSearchParams(window.location.search).get('plan');
   } catch { return null; }
 })();
+// Optional ?step=<step_id> deep-link target. When a plan has multiple
+// gates in flight (a plan-level approval + a later per-step destructive
+// gate), the link can target a specific gate's card. Backward-compatible
+// — omitting "step" falls back to the plan-level card.
+let deepLinkStepId = (function readDeepLinkStepId() {
+  try {
+    const v = new URLSearchParams(window.location.search).get('step');
+    return v && v.length > 0 ? v : null;
+  } catch { return null; }
+})();
 let deepLinkResolved = false;
 
 function applyApprovalDeepLink() {
   if (!deepLinkPlanId || deepLinkResolved) return;
   const list = document.getElementById('approvalsList');
   if (!list) return;
-  const escaped = (typeof CSS !== 'undefined' && CSS.escape)
-    ? CSS.escape(deepLinkPlanId)
-    : String(deepLinkPlanId).replace(/[^a-zA-Z0-9_-]/g, '');
-  const card = list.querySelector('[data-plan-id="' + escaped + '"]');
+  const escape = (s) => (typeof CSS !== 'undefined' && CSS.escape)
+    ? CSS.escape(s)
+    : String(s).replace(/[^a-zA-Z0-9_-]/g, '');
+  // Prefer a step-scoped card when ?step is set; fall back to any
+  // card for the plan (matches v0.4.5 behavior).
+  let card = null;
+  if (deepLinkStepId) {
+    card = list.querySelector(
+      '[data-plan-id="' + escape(deepLinkPlanId) + '"][data-step-id="' + escape(deepLinkStepId) + '"]',
+    );
+  }
+  if (!card) {
+    card = list.querySelector('[data-plan-id="' + escape(deepLinkPlanId) + '"]');
+  }
   if (card) {
     deepLinkResolved = true;
     try {
@@ -5405,13 +5445,15 @@ function isSafetySnapshot(entry) {
 
 function renderApprovalCard(entry) {
   const planId = entry.plan_id;
+  const stepId = typeof entry.step_id === 'string' && entry.step_id.length > 0 ? entry.step_id : '';
+  const k = approvalKey(planId, stepId || undefined);
   const tier = entry.tier || 'read';
   const action = entry.action || 'unknown action';
   const safety = isSafetySnapshot(entry);
   const reasoning = entry.reasoning || '';
-  const decision = state.approvals.decisions[planId];
-  const inFlight = state.approvals.inFlight[planId];
-  const err = state.approvals.errors[planId];
+  const decision = state.approvals.decisions[k];
+  const inFlight = state.approvals.inFlight[k];
+  const err = state.approvals.errors[k];
 
   // Compact key:value table for params/scope. We deliberately render
   // arbitrary params here (not the giant nested plan steps array that
@@ -5419,7 +5461,9 @@ function renderApprovalCard(entry) {
   // the panel scannable.
   let paramsHtml = '';
   const params = entry.params && typeof entry.params === 'object' ? entry.params : {};
-  const keys = Object.keys(params).filter(k => k !== 'steps');
+  // Hide bookkeeping params (_plan_id, _step_id) — they're noise on the
+  // approval card; the step_id badge already shows that information.
+  const keys = Object.keys(params).filter(k => k !== 'steps' && k !== '_plan_id' && k !== '_step_id');
   if (keys.length > 0) {
     let rows = '';
     for (const k of keys) {
@@ -5448,9 +5492,13 @@ function renderApprovalCard(entry) {
     const rejectLabel = inFlight === 'reject'
       ? '<span class="spinner"></span> Rejecting…'
       : 'Reject';
+    // submitApproval receives (planId, decision, stepId?) — stepId is
+    // forwarded only for per-step gates so the POST resolves the right
+    // (plan_id, step_id) entry rather than the plan-level one.
+    const stepArg = stepId ? ", '" + escapeJsString(stepId) + "'" : '';
     footerHtml =
-      '<button class="approval-btn approve" ' + disabledAttr + ' onclick="submitApproval(\\'' + escapeJsString(planId) + '\\', \\'approve\\')">' + approveLabel + '</button>' +
-      '<button class="approval-btn reject" ' + disabledAttr + ' onclick="submitApproval(\\'' + escapeJsString(planId) + '\\', \\'reject\\')">' + rejectLabel + '</button>';
+      '<button class="approval-btn approve" ' + disabledAttr + ' onclick="submitApproval(\\'' + escapeJsString(planId) + '\\', \\'approve\\'' + stepArg + ')">' + approveLabel + '</button>' +
+      '<button class="approval-btn reject" ' + disabledAttr + ' onclick="submitApproval(\\'' + escapeJsString(planId) + '\\', \\'reject\\'' + stepArg + ')">' + rejectLabel + '</button>';
     if (err) footerHtml += '<span class="approval-error">' + escapeHtml(err) + '</span>';
   }
 
@@ -5458,12 +5506,19 @@ function renderApprovalCard(entry) {
   const safetyBadge = safety
     ? '<span class="approval-safety-badge" title="Pre-remediation snapshot — non-destructive">&#x1F6E1; Safety Snapshot</span>'
     : '';
+  // Per-step gates get a visible "step <id>" badge so the operator
+  // can distinguish them from plan-level approvals at a glance.
+  const stepBadge = stepId
+    ? '<span class="approval-tier step" title="Per-step approval gate">step ' + escapeHtml(stepId) + '</span>'
+    : '';
   const ago = entry.requested_at ? 'requested ' + timeAgo(entry.requested_at) : '';
+  const stepAttr = stepId ? ' data-step-id="' + escapeHtml(stepId) + '"' : '';
 
-  return '<div class="approval-card ' + (safety ? 'safety' : '') + '" data-plan-id="' + escapeHtml(planId) + '">' +
+  return '<div class="approval-card ' + (safety ? 'safety' : '') + '" data-plan-id="' + escapeHtml(planId) + '"' + stepAttr + '>' +
     '<div class="approval-card-header">' +
       '<span class="approval-action">' + escapeHtml(action) + '</span>' +
       '<span class="approval-tier ' + tierClass + '">' + escapeHtml(String(tier)) + '</span>' +
+      stepBadge +
       safetyBadge +
       (ago ? '<span class="approval-time">' + ago + '</span>' : '') +
     '</div>' +
@@ -5477,18 +5532,23 @@ function escapeJsString(s) {
   return String(s).replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'");
 }
 
-async function submitApproval(planId, decision) {
+async function submitApproval(planId, decision, stepId) {
   if (!planId || (decision !== 'approve' && decision !== 'reject')) return;
-  if (state.approvals.inFlight[planId]) return;
-  state.approvals.inFlight[planId] = decision;
-  delete state.approvals.errors[planId];
+  const sid = (typeof stepId === 'string' && stepId.length > 0) ? stepId : undefined;
+  const k = approvalKey(planId, sid);
+  if (state.approvals.inFlight[k]) return;
+  state.approvals.inFlight[k] = decision;
+  delete state.approvals.errors[k];
   renderPendingApprovals();
 
   try {
+    const body = sid
+      ? { plan_id: planId, step_id: sid, decision }
+      : { plan_id: planId, decision };
     const res = await fetch('/api/agent/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan_id: planId, decision }),
+      body: JSON.stringify(body),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -5497,17 +5557,17 @@ async function submitApproval(planId, decision) {
     }
     // Optimistically record the decision; the SSE broadcast will land
     // shortly and may overwrite with the server's canonical timestamp.
-    state.approvals.decisions[planId] = {
+    state.approvals.decisions[k] = {
       decision: payload.decision || decision,
       operator: payload.operator || 'api_operator',
       timestamp: payload.timestamp || new Date().toISOString(),
     };
-    delete state.approvals.inFlight[planId];
+    delete state.approvals.inFlight[k];
     renderPendingApprovals();
   } catch (err) {
-    delete state.approvals.inFlight[planId];
+    delete state.approvals.inFlight[k];
     const msg = err && err.message ? err.message : 'Approval request failed';
-    state.approvals.errors[planId] = msg;
+    state.approvals.errors[k] = msg;
     renderPendingApprovals();
     showToast(msg);
   }

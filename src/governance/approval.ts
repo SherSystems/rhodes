@@ -50,22 +50,45 @@ export type AwaitingApprovalListener = (entry: PendingApprovalEntry) => void;
 
 export interface PendingApprovalEntry {
   plan_id: string;
+  /** Step identifier when this gate is per-step; absent for plan-level gates. */
+  step_id?: string;
   request_id: string;
   action: string;
   tier: ActionTier;
   params: Record<string, unknown>;
   reasoning: string;
   requested_at: string;
-  /** When true, this is a plan-level approval (covers all steps).
-   *  When false/undefined, this is a per-step approval gate. */
+  /** "plan" — gate raised once at plan-creation time, scope is the plan as
+   *           a whole. Does NOT cover destructive per-step gates flagged in
+   *           `policy.explicit_tiers`.
+   *  "step" — gate raised mid-plan for a single step; must be approved on
+   *           its own merit (its own (plan_id, step_id) key). */
   scope: "plan" | "step";
 }
 
 export interface ApprovalDecisionRecord {
   plan_id: string;
+  /** Step identifier when this decision was issued against a per-step gate;
+   *  absent for plan-level decisions. */
+  step_id?: string;
   decision: "approve" | "reject";
   operator: string;
   timestamp: string;
+}
+
+/**
+ * Composite key for the pending/decisions maps. Plan-level entries use
+ * `plan_id` with no `step_id`; per-step entries scope by `(plan_id, step_id)`.
+ *
+ * SECURITY: keying by `plan_id` alone (the v0.4.5 and earlier behavior)
+ * caused per-step destructive gates to be auto-resolved by an earlier
+ * plan-level approval — see correctness audit HIGH #1 and security audit H-1
+ * (`docs/audits/correctness-2026-05-14.md`, `docs/audits/security-2026-05-14.md`).
+ * The (plan_id, step_id) split closes that bypass while keeping plan-level
+ * decisions distinct from any later per-step gates against the same plan.
+ */
+function approvalKey(planId: string, stepId?: string): string {
+  return stepId ? `${planId}::step:${stepId}` : `${planId}::plan`;
 }
 
 // ── ApprovalGate Class ──────────────────────────────────────
@@ -73,16 +96,29 @@ export interface ApprovalDecisionRecord {
 export class ApprovalGate {
   private externalHandler: ExternalApprovalHandler | null = null;
   private planApprovalHandler: PlanApprovalHandler | null = null;
-  /** Plan IDs that have been approved at plan-level — steps skip individual approval */
+  /** Plan IDs that have been approved at plan-level — non-explicit-tier steps
+   *  skip individual approval. Destructive / `explicit_tiers` steps still
+   *  raise their own per-step gate. */
   private approvedPlans: Set<string> = new Set();
 
   // ── API-driven approval plumbing ───────────────────────────
-  /** Pending approval gates keyed by plan_id, awaiting an API decision. */
+  /**
+   * Pending approval gates keyed by `approvalKey(plan_id, step_id?)`,
+   * awaiting an API decision. Plan-level entries are keyed without
+   * `step_id`, per-step entries with it — so a plan-level gate and any
+   * later per-step gate against the same plan occupy different slots
+   * and do not collide.
+   */
   private pendingResolvers: Map<
     string,
     { entry: PendingApprovalEntry; resolve: (approved: boolean) => void }
   > = new Map();
-  /** Latest decision per plan_id, used for idempotent re-approval and history. */
+  /**
+   * Latest decision per `approvalKey(plan_id, step_id?)`, used for idempotent
+   * re-approval and history. Scoped by step so per-step destructive gates
+   * (`policy.explicit_tiers`) require their own operator confirmation rather
+   * than inheriting any earlier plan-level decision.
+   */
   private decisions: Map<string, ApprovalDecisionRecord> = new Map();
   /** Listeners notified whenever an approval becomes pending. */
   private awaitingListeners: Set<AwaitingApprovalListener> = new Set();
@@ -102,7 +138,9 @@ export class ApprovalGate {
 
   /**
    * Set a plan-level approval handler (e.g., Dashboard shows full plan).
-   * When a plan is approved at plan-level, individual steps skip approval.
+   * When a plan is approved at plan-level, individual steps skip approval
+   * UNLESS their tier is listed in `policy.orchestration.approval.explicit_tiers`
+   * — those still raise a per-step gate and must be approved on their own.
    */
   setPlanApprovalHandler(handler: PlanApprovalHandler): void {
     this.planApprovalHandler = handler;
@@ -125,19 +163,33 @@ export class ApprovalGate {
   }
 
   /**
-   * API-side hook: register an operator decision for a plan that is
-   * currently blocked at an approval gate. Returns the prior decision
-   * for idempotency, or `null` if no matching pending plan exists.
+   * API-side hook: register an operator decision for a gate that is
+   * currently blocked. Returns the prior decision for idempotency, or
+   * `{ ok: false, reason: "unknown_plan" }` when nothing matches.
+   *
+   * - When `stepId` is omitted, the decision resolves the plan-level
+   *   gate for `planId` (matches today's API at plan-creation time).
+   * - When `stepId` is provided, the decision is scoped to that
+   *   per-step gate and does NOT resolve any other pending gates
+   *   (plan-level or other per-step) for the same plan.
+   *
+   * SECURITY: prior to v0.4.6 this method keyed everything by `plan_id`
+   * alone, so a plan-level approval was used to auto-resolve later
+   * per-step destructive gates — correctness audit HIGH #1 / security
+   * audit H-1. The composite key closes that bypass.
    */
   submitApiDecision(
     planId: string,
     decision: "approve" | "reject",
     operator: string,
+    stepId?: string,
   ): { ok: true; resolved: boolean; record: ApprovalDecisionRecord } | { ok: false; reason: "unknown_plan" } {
-    const existing = this.decisions.get(planId);
-    const pending = this.pendingResolvers.get(planId);
+    const key = approvalKey(planId, stepId);
+    const existing = this.decisions.get(key);
+    const pending = this.pendingResolvers.get(key);
 
-    // Idempotency: if a decision was already recorded and matches, keep it.
+    // Idempotency: if a decision was already recorded and there's no
+    // pending entry to resolve, return the prior record unchanged.
     if (existing && !pending) {
       return { ok: true, resolved: false, record: existing };
     }
@@ -148,14 +200,15 @@ export class ApprovalGate {
 
     const record: ApprovalDecisionRecord = {
       plan_id: planId,
+      ...(stepId ? { step_id: stepId } : {}),
       decision,
       operator,
       timestamp: new Date().toISOString(),
     };
-    this.decisions.set(planId, record);
+    this.decisions.set(key, record);
 
     if (pending) {
-      this.pendingResolvers.delete(planId);
+      this.pendingResolvers.delete(key);
       pending.resolve(decision === "approve");
     }
 
@@ -188,9 +241,12 @@ export class ApprovalGate {
 
     // No CLI handler — try the API path if anyone is listening.
     if (this.awaitingListeners.size > 0) {
-      // Pre-existing decision (e.g., an operator pre-approved before
-      // the planner enqueued the gate): honour it immediately.
-      const prior = this.decisions.get(planId);
+      const key = approvalKey(planId);
+      // Pre-existing plan-level decision (e.g., an operator pre-approved
+      // before the planner enqueued the gate): honour it immediately.
+      // Step-level decisions never resolve a plan-level request — they
+      // live under a different (plan_id, step_id) key.
+      const prior = this.decisions.get(key);
       if (prior) {
         const approved = prior.decision === "approve";
         if (approved) this.approvedPlans.add(planId);
@@ -209,7 +265,7 @@ export class ApprovalGate {
       };
 
       const approved = await new Promise<boolean>((resolve) => {
-        this.pendingResolvers.set(planId, { entry, resolve });
+        this.pendingResolvers.set(key, { entry, resolve });
         this.emitAwaiting(entry);
       });
 
@@ -262,6 +318,12 @@ export class ApprovalGate {
   /**
    * Request human approval via CLI prompt.
    * Returns an ApprovalResponse with the user's decision.
+   *
+   * NOTE: when `request.step_id` is set, this creates a per-step gate
+   * keyed by `(plan_id, step_id)`. A separately-issued plan-level
+   * decision for the same plan_id does NOT auto-resolve it — the
+   * operator must approve the step explicitly. This is the v0.4.6
+   * fix for correctness audit HIGH #1 / security audit H-1.
    */
   async requestApproval(
     request: ApprovalRequest,
@@ -277,6 +339,9 @@ export class ApprovalGate {
     console.error(`│ Reasoning: ${request.reasoning}`);
     if (request.plan_id) {
       console.error(`│ Plan:      ${request.plan_id}`);
+    }
+    if (request.step_id) {
+      console.error(`│ Step:      ${request.step_id}`);
     }
     console.error(`│ Params:    ${JSON.stringify(request.params, null, 2).replace(/\n/g, "\n│            ")}`);
     console.error("└─────────────────────────────────────────────");
@@ -296,14 +361,21 @@ export class ApprovalGate {
     // API path — only valid when a plan_id binds the request to a known
     // operator queue. The dashboard / any subscriber gets notified via
     // AwaitingApproval, and submitApiDecision() resolves the promise.
+    //
+    // Scope: when request.step_id is set, this is a per-step gate and is
+    // keyed by (plan_id, step_id). Plan-level decisions for the same
+    // plan_id do NOT resolve it — the gate must be approved on its own.
     if (request.plan_id && this.awaitingListeners.size > 0) {
       const planId = request.plan_id;
-      const prior = this.decisions.get(planId);
+      const stepId = request.step_id;
+      const key = approvalKey(planId, stepId);
+      const prior = this.decisions.get(key);
       const approved = await (prior
         ? Promise.resolve(prior.decision === "approve")
         : new Promise<boolean>((resolve) => {
             const entry: PendingApprovalEntry = {
               plan_id: planId,
+              ...(stepId ? { step_id: stepId } : {}),
               request_id: request.id,
               action: request.action,
               tier: request.tier,
@@ -312,11 +384,11 @@ export class ApprovalGate {
               requested_at: request.timestamp,
               scope: "step",
             };
-            this.pendingResolvers.set(planId, { entry, resolve });
+            this.pendingResolvers.set(key, { entry, resolve });
             this.emitAwaiting(entry);
           }));
 
-      const operator = this.decisions.get(planId)?.operator;
+      const operator = this.decisions.get(key)?.operator;
       return {
         request_id: request.id,
         approved,

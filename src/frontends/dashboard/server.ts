@@ -1789,6 +1789,10 @@ export class DashboardServer {
       res,
       pending.map((p) => ({
         plan_id: p.plan_id,
+        // step_id is present on per-step gates. The dashboard uses
+        // (plan_id, step_id) to render multi-gate plans without
+        // collapsing distinct gates onto a single card.
+        ...(p.step_id ? { step_id: p.step_id } : {}),
         request_id: p.request_id,
         action: p.action,
         tier: p.tier,
@@ -1826,6 +1830,10 @@ export class DashboardServer {
     const operator = typeof body.operator === "string" && body.operator.trim().length > 0
       ? body.operator.trim()
       : "api_operator";
+    // Optional: when set, the decision is scoped to a single per-step gate.
+    // Backward-compatible — omitted means "plan-level decision" as before.
+    const stepIdRaw = typeof body.step_id === "string" ? body.step_id.trim() : "";
+    const stepId = stepIdRaw.length > 0 ? stepIdRaw : undefined;
 
     if (!planId) {
       this.json(res, { error: "Missing required field: plan_id" }, 400);
@@ -1840,16 +1848,19 @@ export class DashboardServer {
       planId,
       decisionRaw as "approve" | "reject",
       operator,
+      stepId,
     );
 
     if (!outcome.ok) {
-      this.json(res, { error: "Unknown plan_id" }, 404);
+      this.json(res, { error: stepId ? "Unknown plan_id/step_id" : "Unknown plan_id" }, 404);
       return;
     }
 
     const status = outcome.record.decision === "approve" ? "approved" : "rejected";
 
     // Mirror the decision onto the SSE stream so all dashboards update.
+    // step_id is carried through so per-step cards on remote dashboards
+    // can resolve the specific gate (not collapse onto the plan card).
     this.eventBus.emit({
       type: outcome.record.decision === "approve"
         ? AgentEventType.PlanApproved
@@ -1857,6 +1868,7 @@ export class DashboardServer {
       timestamp: outcome.record.timestamp,
       data: {
         plan_id: outcome.record.plan_id,
+        ...(outcome.record.step_id ? { step_id: outcome.record.step_id } : {}),
         operator: outcome.record.operator,
         decision: outcome.record.decision,
         idempotent: !outcome.resolved,
@@ -1866,6 +1878,7 @@ export class DashboardServer {
 
     this.json(res, {
       plan_id: outcome.record.plan_id,
+      ...(outcome.record.step_id ? { step_id: outcome.record.step_id } : {}),
       status,
       decision: outcome.record.decision,
       operator: outcome.record.operator,

@@ -334,8 +334,13 @@ export class AgentCore {
           continue;
         }
 
-        // Inject plan ID into params so governance can check plan-level approval
+        // Inject plan + step IDs into params so governance can check plan-level
+        // approval AND scope per-step gates by (plan_id, step_id). The step_id
+        // is what lets per-step destructive gates require their own operator
+        // confirmation rather than inheriting a prior plan-level decision —
+        // see correctness audit HIGH #1.
         step.params._plan_id = activePlan.id;
+        step.params._step_id = step.id;
         const result = await this.executor.executeStep(
           step,
           goal.mode,
