@@ -75,7 +75,7 @@ const RISKY_RULES: Rule[] = [
   { re: /\bqm\s+start\b/, tag: "qm-start" }, // boots a VM — wrong VM = harm
   { re: /\bpct\s+(stop|shutdown|reboot)\b/, tag: "pct-power" },
   { re: /\bpct\s+start\b/, tag: "pct-start" },
-  { re: /\bsystemctl\s+(restart|reload|stop|start)\b/, tag: "systemctl-mutate" },
+  { re: /\bsystemctl\s+(restart|reload|stop|start|enable|disable|mask|unmask|daemon-reload)\b/, tag: "systemctl-mutate" },
   { re: /\bservice\s+\S+\s+(restart|reload|stop|start)\b/, tag: "service-mutate" },
   { re: /\bkill\s+-?\d+\b|\bkill\s+\d+\b/, tag: "kill-pid" },
   { re: /\bpkill\b/, tag: "pkill" },

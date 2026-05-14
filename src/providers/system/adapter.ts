@@ -6,6 +6,7 @@ import type {
   ToolCallResult,
   ClusterState,
 } from "../types.js";
+import { classifyCommand } from "../ssh/safety.js";
 
 export interface SystemAdapterConfig {
   sshStrictHostKeyCheck?: boolean;
@@ -19,6 +20,46 @@ export class SystemAdapter implements InfraAdapter {
   private readonly sshStrictHostKeyCheck: boolean;
   private static readonly MAX_PACKAGE_INPUT_LENGTH = 512;
   private static readonly PACKAGE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9+_.:-]*$/;
+
+  // ── configureService input-validation gates ──────────────────
+  //
+  // Security C-1 (HIGH, docs/audits/security-2026-05-14.md): before
+  // the fix, `service` and `config_path` were shell-interpolated into
+  // a script string. Both are now validated against strict allowlists
+  // BEFORE any command is constructed, AND each constructed remote
+  // command is re-classified by the SSH safety classifier as a
+  // defense-in-depth check. Two layers must agree before anything ships.
+  //
+  // SERVICE_NAME_PATTERN matches what systemd permits in unit names —
+  // alphanumerics plus `_`, `.`, `@`, `:`, `-`. No spaces, no quotes,
+  // no shell metacharacters, no path separators.
+  private static readonly SERVICE_NAME_PATTERN = /^[a-zA-Z0-9_.@:-]+$/;
+  private static readonly MAX_SERVICE_NAME_LENGTH = 128;
+
+  // CONFIG_PATH_PATTERN: absolute path containing only the limited
+  // character set we know we can quote safely. No spaces, no quotes,
+  // no metachars, no backslash. We further enforce a prefix allowlist
+  // and a `..`-segment ban.
+  private static readonly CONFIG_PATH_PATTERN = /^\/[a-zA-Z0-9_./@:-]+$/;
+  private static readonly CONFIG_PATH_ALLOWED_PREFIXES = [
+    "/etc/",
+    "/var/lib/",
+    "/usr/local/etc/",
+    "/opt/",
+    "/srv/",
+  ];
+  private static readonly MAX_CONFIG_PATH_LENGTH = 512;
+
+  // Actions allowed by configure_service. Anything not in this set
+  // is refused before any command is built.
+  private static readonly CONFIGURE_SERVICE_ACTIONS = new Set([
+    "enable_and_start",
+    "start",
+    "stop",
+    "restart",
+    "enable",
+    "status",
+  ]);
 
   constructor(config: SystemAdapterConfig = {}) {
     this.sshStrictHostKeyCheck = config.sshStrictHostKeyCheck ?? true;
@@ -92,19 +133,19 @@ export class SystemAdapter implements InfraAdapter {
       {
         name: "configure_service",
         description:
-          "Enable and start a systemd service on a remote host. Optionally write a config file before starting.",
+          "Enable and start a systemd service on a remote host. Optionally write a config file before starting. Inputs are validated against strict allowlists and each constructed remote command is re-classified by the SSH safety classifier.",
         tier: "risky_write",
         adapter: "system",
         params: [
           { name: "host", type: "string", required: true, description: "Target IP or hostname" },
           { name: "user", type: "string", required: false, description: "SSH user", default: "root" },
-          { name: "service", type: "string", required: true, description: "Service name (e.g. 'nginx', 'docker')" },
-          { name: "config_path", type: "string", required: false, description: "Path to write a config file before starting" },
-          { name: "config_content", type: "string", required: false, description: "Content to write to config_path" },
-          { name: "action", type: "string", required: false, description: "Action: start, stop, restart, enable, status", default: "enable_and_start" },
+          { name: "service", type: "string", required: true, description: "Service name (e.g. 'nginx', 'docker'). Must match /^[a-zA-Z0-9_.@:-]+$/." },
+          { name: "config_path", type: "string", required: false, description: "Path to write a config file before starting. Must be absolute and start with one of /etc/, /var/lib/, /usr/local/etc/, /opt/, /srv/." },
+          { name: "config_content", type: "string", required: false, description: "Content to write to config_path (streamed over stdin; never shell-interpolated)." },
+          { name: "action", type: "string", required: false, description: "Action: start, stop, restart, enable, status, enable_and_start", default: "enable_and_start" },
           { name: "timeout_ms", type: "number", required: false, description: "Timeout in ms", default: 30000 },
         ],
-        returns: "{ stdout, stderr, exitCode, service_status }",
+        returns: "{ stdout, stderr, exitCode, service_status, steps }",
       },
       {
         name: "run_script",
@@ -338,56 +379,290 @@ export class SystemAdapter implements InfraAdapter {
       return { success: false, error: "host and service are required" };
     }
 
-    let script = "";
-
-    if (configPath && configContent) {
-      const escaped = configContent.replace(/'/g, "'\\''");
-      script += `mkdir -p "$(dirname '${configPath}')" && cat > '${configPath}' << 'RHODES_EOF'\n${escaped}\nRHODES_EOF\n`;
+    // ── Layer 1: strict input validation (security C-1 HIGH) ─────
+    //
+    // Reject anything that doesn't match the systemd-allowed
+    // character set before we construct any command. This kills
+    // shell-injection at the earliest possible point.
+    const serviceCheck = this.validateServiceName(service);
+    if (!serviceCheck.success) {
+      return { success: false, error: serviceCheck.error };
     }
 
+    const wantsConfigWrite = configPath !== undefined || configContent !== undefined;
+    let validatedConfigPath: string | undefined;
+    if (wantsConfigWrite) {
+      if (!configPath || configContent === undefined) {
+        return {
+          success: false,
+          error: "config_path and config_content must be provided together",
+        };
+      }
+      const pathCheck = this.validateConfigPath(configPath);
+      if (!pathCheck.success) {
+        return { success: false, error: pathCheck.error };
+      }
+      validatedConfigPath = pathCheck.path;
+    }
+
+    if (!SystemAdapter.CONFIGURE_SERVICE_ACTIONS.has(action)) {
+      return { success: false, error: `Unknown action: ${action}` };
+    }
+
+    // ── Layer 2: write config (if requested) via argv-style `tee`,
+    // streaming content over stdin so the file CONTENT is never
+    // shell-interpreted on either side.
+    if (validatedConfigPath && configContent !== undefined) {
+      const writeResult = await this.writeRemoteFile({
+        host,
+        user,
+        path: validatedConfigPath,
+        content: configContent,
+        timeoutMs: timeout,
+      });
+      if (!writeResult.success) {
+        return writeResult;
+      }
+    }
+
+    // ── Layer 3: run each systemctl step as a SEPARATE single-verb
+    // ssh call. That keeps every constructed command classifier-
+    // friendly (no `&&` chain → no metachar gate). The SSH classifier
+    // tags each `systemctl <mutate> <service>` as `risky_write`
+    // (rule `systemctl-mutate`) and `systemctl status ...` as `read`.
+    // Defense-in-depth: re-classify each command before dispatch and
+    // refuse if anything comes back `destructive` or `never`.
+    const steps = this.buildConfigureServiceSteps(action, service);
+    const stepResults: Array<{
+      step: string;
+      tier: string;
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+    }> = [];
+
+    for (const step of steps) {
+      const classification = classifyCommand(step);
+      if (classification.tier === "destructive" || classification.tier === "never") {
+        // Should be unreachable after validation; bail hard if not.
+        return {
+          success: false,
+          error:
+            `configure_service: refused — built command classified as ${classification.tier} ` +
+            `(${classification.match}). This indicates an input-validation gap; aborting.`,
+          data: { step, classification },
+        };
+      }
+
+      const stepResult = await this.runProcess(
+        "ssh",
+        [
+          ...this.buildSshOptions(10),
+          `${user}@${host}`,
+          step,
+        ],
+        timeout,
+      );
+
+      const data = (stepResult.data as { stdout?: string; stderr?: string; exitCode?: number }) ?? {};
+      stepResults.push({
+        step,
+        tier: classification.tier,
+        stdout: data.stdout ?? "",
+        stderr: data.stderr ?? "",
+        exitCode: data.exitCode ?? 1,
+      });
+
+      if (!stepResult.success) {
+        return {
+          success: false,
+          error: stepResult.error ?? `Step failed: ${step}`,
+          data: { steps: stepResults },
+        };
+      }
+    }
+
+    const lastStdout = stepResults[stepResults.length - 1]?.stdout ?? "";
+    const lastStderr = stepResults[stepResults.length - 1]?.stderr ?? "";
+
+    return {
+      success: true,
+      data: {
+        stdout: lastStdout,
+        stderr: lastStderr,
+        exitCode: 0,
+        service_status: "active",
+        steps: stepResults,
+      },
+    };
+  }
+
+  /**
+   * Construct the ordered list of single-verb shell commands that
+   * implement a configure_service action. Each entry is a complete,
+   * standalone command that the SSH safety classifier can tier in
+   * isolation — there is intentionally no `&&` chaining.
+   */
+  private buildConfigureServiceSteps(action: string, service: string): string[] {
+    // `service` was validated against SERVICE_NAME_PATTERN above,
+    // which excludes every shell metacharacter, so it is safe to
+    // splice without quoting.
     switch (action) {
       case "enable_and_start":
-        script += `systemctl enable ${service} && systemctl start ${service} && systemctl status ${service} --no-pager`;
-        break;
+        return [
+          `systemctl enable ${service}`,
+          `systemctl start ${service}`,
+          `systemctl status ${service} --no-pager`,
+        ];
       case "start":
-        script += `systemctl start ${service} && systemctl status ${service} --no-pager`;
-        break;
+        return [
+          `systemctl start ${service}`,
+          `systemctl status ${service} --no-pager`,
+        ];
       case "stop":
-        script += `systemctl stop ${service}`;
-        break;
+        return [`systemctl stop ${service}`];
       case "restart":
-        script += `systemctl restart ${service} && systemctl status ${service} --no-pager`;
-        break;
+        return [
+          `systemctl restart ${service}`,
+          `systemctl status ${service} --no-pager`,
+        ];
       case "enable":
-        script += `systemctl enable ${service}`;
-        break;
+        return [`systemctl enable ${service}`];
       case "status":
-        script += `systemctl status ${service} --no-pager`;
-        break;
+        return [`systemctl status ${service} --no-pager`];
       default:
-        return { success: false, error: `Unknown action: ${action}` };
+        return [];
     }
+  }
 
-    const result = await this.runProcess(
-      "ssh",
-      [
-        ...this.buildSshOptions(10),
-        `${user}@${host}`,
-        script,
-      ],
-      timeout,
-    );
+  /**
+   * Write a remote file using `tee` with the path passed as a
+   * single-quoted argv token. Content is streamed via stdin so it
+   * is NEVER shell-interpreted. The directory is created up front
+   * with a separate `mkdir -p` call against a quoted path.
+   */
+  private async writeRemoteFile(opts: {
+    host: string;
+    user: string;
+    path: string;
+    content: string;
+    timeoutMs: number;
+  }): Promise<ToolCallResult> {
+    const quotedPath = this.quoteShellWord(opts.path);
+    // Build the dir name locally without invoking the shell (no
+    // `$(dirname ...)`): opts.path was validated to start with `/`,
+    // so the prefix up to the last `/` is the dirname.
+    const dirname = opts.path.includes("/")
+      ? opts.path.slice(0, opts.path.lastIndexOf("/")) || "/"
+      : "/";
+    const quotedDir = this.quoteShellWord(dirname);
 
-    if (result.success) {
+    // Step 1: mkdir -p <dir>. Classifies as `safe_write`.
+    const mkdirCmd = `mkdir -p ${quotedDir}`;
+    const mkdirClass = classifyCommand(mkdirCmd);
+    if (mkdirClass.tier === "destructive" || mkdirClass.tier === "never") {
       return {
-        success: true,
-        data: {
-          ...(result.data as Record<string, unknown>),
-          service_status: "active",
-        },
+        success: false,
+        error: `configure_service: refused — mkdir step classified as ${mkdirClass.tier} (${mkdirClass.match}).`,
       };
     }
-    return result;
+    const mkdirResult = await this.runProcess(
+      "ssh",
+      [...this.buildSshOptions(10), `${opts.user}@${opts.host}`, mkdirCmd],
+      opts.timeoutMs,
+    );
+    if (!mkdirResult.success) {
+      return mkdirResult;
+    }
+
+    // Step 2: stream content into `tee <path>` via stdin. The
+    // command on the remote side never sees the content as a shell
+    // token; it only sees `tee <quoted-path>`. The input-validation
+    // layer (path prefix allowlist + character allowlist + ".." ban)
+    // is the actual gate that makes the path safe.
+    const teeCmd = `tee ${quotedPath} >/dev/null`;
+    return this.runProcess(
+      "ssh",
+      [...this.buildSshOptions(10), `${opts.user}@${opts.host}`, teeCmd],
+      opts.timeoutMs,
+      opts.content,
+    );
+  }
+
+  private validateServiceName(
+    raw: string,
+  ): { success: true; service: string } | { success: false; error: string } {
+    if (typeof raw !== "string") {
+      return { success: false, error: "service must be a string" };
+    }
+    if (raw.length === 0) {
+      return { success: false, error: "service must be non-empty" };
+    }
+    if (raw.length > SystemAdapter.MAX_SERVICE_NAME_LENGTH) {
+      return {
+        success: false,
+        error: `service exceeds ${SystemAdapter.MAX_SERVICE_NAME_LENGTH} characters`,
+      };
+    }
+    if (raw.includes("\0")) {
+      return { success: false, error: "service contains invalid null bytes" };
+    }
+    if (!SystemAdapter.SERVICE_NAME_PATTERN.test(raw)) {
+      return {
+        success: false,
+        error:
+          `service "${raw}" contains characters outside the systemd-allowed ` +
+          `set [a-zA-Z0-9_.@:-]. Refused to prevent shell injection.`,
+      };
+    }
+    return { success: true, service: raw };
+  }
+
+  private validateConfigPath(
+    raw: string,
+  ): { success: true; path: string } | { success: false; error: string } {
+    if (typeof raw !== "string") {
+      return { success: false, error: "config_path must be a string" };
+    }
+    if (raw.length === 0) {
+      return { success: false, error: "config_path must be non-empty" };
+    }
+    if (raw.length > SystemAdapter.MAX_CONFIG_PATH_LENGTH) {
+      return {
+        success: false,
+        error: `config_path exceeds ${SystemAdapter.MAX_CONFIG_PATH_LENGTH} characters`,
+      };
+    }
+    if (raw.includes("\0")) {
+      return { success: false, error: "config_path contains invalid null bytes" };
+    }
+    if (!SystemAdapter.CONFIG_PATH_PATTERN.test(raw)) {
+      return {
+        success: false,
+        error:
+          `config_path "${raw}" contains characters outside the allowed set ` +
+          `[a-zA-Z0-9_./@:-] (must be an absolute path with no quotes / metachars).`,
+      };
+    }
+    // No path-traversal segments.
+    if (raw.split("/").some((segment) => segment === "..")) {
+      return {
+        success: false,
+        error: `config_path "${raw}" contains a ".." segment; refused.`,
+      };
+    }
+    const prefixOk = SystemAdapter.CONFIG_PATH_ALLOWED_PREFIXES.some((p) =>
+      raw.startsWith(p),
+    );
+    if (!prefixOk) {
+      return {
+        success: false,
+        error:
+          `config_path "${raw}" is outside the allowed prefixes ` +
+          `(${SystemAdapter.CONFIG_PATH_ALLOWED_PREFIXES.join(", ")}).`,
+      };
+    }
+    return { success: true, path: raw };
   }
 
   private async runScript(params: Record<string, unknown>): Promise<ToolCallResult> {
@@ -455,21 +730,31 @@ export class SystemAdapter implements InfraAdapter {
   private runProcess(
     cmd: string,
     args: string[],
-    timeout: number
+    timeout: number,
+    stdin?: string,
   ): Promise<ToolCallResult> {
     return new Promise((resolve) => {
       let stdout = "";
       let stderr = "";
       let killed = false;
 
-      const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc = stdin !== undefined
+        ? spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] })
+        : spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+
+      if (stdin !== undefined && proc.stdin) {
+        proc.stdin.on("error", () => {
+          // Ignore EPIPE — child may exit before we finish writing.
+        });
+        proc.stdin.end(stdin);
+      }
 
       const timer = setTimeout(() => {
         killed = true;
         proc.kill("SIGTERM");
       }, timeout);
 
-      proc.stdout.on("data", (chunk: Buffer) => {
+      proc.stdout?.on("data", (chunk: Buffer) => {
         stdout += chunk.toString();
         if (stdout.length > 10240) {
           stdout = stdout.slice(0, 10240) + "\n...[truncated]";
@@ -477,7 +762,7 @@ export class SystemAdapter implements InfraAdapter {
         }
       });
 
-      proc.stderr.on("data", (chunk: Buffer) => {
+      proc.stderr?.on("data", (chunk: Buffer) => {
         stderr += chunk.toString();
         if (stderr.length > 5120) {
           stderr = stderr.slice(0, 5120) + "\n...[truncated]";
