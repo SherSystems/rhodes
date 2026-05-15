@@ -374,6 +374,48 @@ describe("IncidentCoordinator", () => {
     expect(events).toHaveLength(0);
   });
 
+  it("resolveIncident fires the ticket-resolve hook so the postmortem DM lands", async () => {
+    // Regression: healing-engine.ts called incidentManager.resolve()
+    // directly on playbook success, which set incident.status=resolved
+    // but never synced the ticket row or fired onTicketResolved.
+    // Result: ticket stayed at status=open with no postmortem and no
+    // operator DM. Caught during the v0.5.0 esxi-02 demo on 2026-05-15
+    // (RHODES-2026-016 — playbook succeeded in 8 steps, operator never
+    // got the resolve DM thread reply).
+    const { coordinator } = makeCoordinator();
+    const hookCalls: Array<{ ticket: unknown; incident: unknown }> = [];
+    // Wire a fake TicketStore + onResolved hook to observe.
+    const fakeStore = {
+      syncFromIncident: (incident: { id: string; status: string }) => ({
+        ticket_id: "RHODES-TEST-001",
+        incident_id: incident.id,
+        status: incident.status,
+      }),
+    };
+    coordinator.attachTicketStore(
+      fakeStore as unknown as Parameters<typeof coordinator.attachTicketStore>[0],
+      {
+        onResolved: (ticket, incident) => {
+          hookCalls.push({ ticket, incident });
+        },
+      },
+    );
+
+    const incident = coordinator.openIncident(
+      makeAnomaly({ id: "a-1", metric: "vm_status", labels: { vmid: "201", node: "pranavlab" } }),
+    );
+    coordinator.resolveIncident(incident.id, "Healed via test path");
+
+    // Hook is fired via void-Promise — wait a microtask so the assertion
+    // runs after the .then() callback.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(coordinator.incidentManager.getById(incident.id)?.status).toBe("resolved");
+    expect(hookCalls).toHaveLength(1);
+    expect((hookCalls[0].incident as { id: string }).id).toBe(incident.id);
+  });
+
   it("matches open incidents only when labels fully match", () => {
     const { coordinator } = makeCoordinator();
     coordinator.openIncident(

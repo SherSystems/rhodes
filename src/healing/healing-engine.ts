@@ -273,7 +273,7 @@ class HealingExecutor {
             true,
             `${fastResult.steps_completed} step(s) completed in ${fastResult.duration_ms}ms`,
           );
-          this.incidentCoordinator.incidentManager.resolve(
+          this.incidentCoordinator.resolveIncident(
             incident.id,
             `Healed by playbook "${playbook.name}" — ${fastResult.steps_completed} step(s) completed via direct tool call`,
           );
@@ -328,7 +328,7 @@ class HealingExecutor {
         true,
         `${result.steps_completed} steps completed in ${result.duration_ms}ms`,
       );
-      this.incidentCoordinator.incidentManager.resolve(
+      this.incidentCoordinator.resolveIncident(
         incident.id,
         `Healed by playbook "${playbook.name}" — ${result.steps_completed} steps completed`,
       );

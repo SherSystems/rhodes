@@ -116,9 +116,24 @@ export class IncidentCoordinator {
       });
   }
 
+  /** Public resolve that bundles incident.resolve() + ticket-layer
+   *  sync + onTicketResolved hook. Every code path that resolves an
+   *  incident MUST go through here, not `incidentManager.resolve()`
+   *  directly — the manager call alone doesn't update the ticket
+   *  row's status/resolved_at and doesn't fire the postmortem/DM
+   *  hook. Caught during the v0.5.0 esxi-02 demo on 2026-05-15:
+   *  RHODES-2026-016's healing playbook succeeded and resolved the
+   *  incident directly, leaving the ticket stuck at status=open with
+   *  no postmortem and no resolved DM to the operator. */
+  resolveIncident(incidentId: string, resolution: string): void {
+    this.incidentManager.resolve(incidentId, resolution);
+    const fresh = this.incidentManager.getById(incidentId);
+    if (fresh) this.handleTicketForResolved(fresh);
+  }
+
   /** Sync the Ticket row to the incident's current state and fire the
-   *  resolve-hook. Called from the resolveRecoveredIncidents path
-   *  immediately after `incidentManager.resolve`. */
+   *  resolve-hook. Called from `resolveIncident()` immediately after
+   *  `incidentManager.resolve`. */
   private handleTicketForResolved(incident: Incident): void {
     if (!this.ticketStore) return;
     let ticket: TicketRecord;
@@ -350,12 +365,10 @@ export class IncidentCoordinator {
             incident.labels.runtime_status ??
             incidentReason;
           const displayName = incident.labels.name || incident.labels.vmid;
-          this.incidentManager.resolve(
+          this.resolveIncident(
             incident.id,
             `VM ${displayName} state recovered: ${before} → ${latestRuntimeStatus}`,
           );
-          const fresh = this.incidentManager.getById(incident.id);
-          if (fresh) this.handleTicketForResolved(fresh);
 
           this.emitEvent(AgentEventType.AlertResolved, {
             incident_id: incident.id,
@@ -382,12 +395,10 @@ export class IncidentCoordinator {
       }
 
       if (latest.value < incident.trigger_value * 0.7) {
-        this.incidentManager.resolve(
+        this.resolveIncident(
           incident.id,
           `Metrics returned to normal (${latest.value.toFixed(1)} < ${incident.trigger_value.toFixed(1)})`,
         );
-        const fresh = this.incidentManager.getById(incident.id);
-        if (fresh) this.handleTicketForResolved(fresh);
 
         this.emitEvent(AgentEventType.AlertResolved, {
           incident_id: incident.id,
