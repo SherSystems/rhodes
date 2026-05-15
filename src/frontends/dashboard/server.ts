@@ -2266,6 +2266,27 @@ export class DashboardServer {
         };
         return this.agentCore.run(goal);
       },
+      postSlackThreadReply: async ({ channel, thread_ts, command, result, error }) => {
+        // Reply once in the thread with a consolidated summary of what
+        // the agent did. Designed for an employee-grade UX: not noisy,
+        // not stepwise, just the answer + a dashboard link for the
+        // operator to dig deeper if they want.
+        if (!this.notifier) return;
+        const summary = buildSlackAgentReplySummary({ command, result, error });
+        await this.notifier.sendOnSlack({
+          title: summary.title,
+          body: summary.body,
+          kind: "plan_generated",
+          context: {
+            slack_channel: channel,
+            slack_thread_ts: thread_ts,
+            plan_id: summary.plan_id,
+            steps_completed: summary.steps_completed,
+            success: summary.success,
+            dashboard_url: summary.dashboard_url,
+          },
+        });
+      },
       submitApprovalDecision: (planId, decision, operator, stepId) => {
         if (!this.approvalGate) return { ok: false };
         const outcome = this.approvalGate.submitApiDecision(
@@ -2366,4 +2387,80 @@ export class DashboardServer {
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify(data));
   }
+}
+
+/**
+ * Build the one-message reply the bot posts back into a Slack thread
+ * after an agent run kicked off via @-mention or DM. Designed to read
+ * like an employee summarizing what they just did — not stepwise event
+ * spam. Keeps the noisy stuff (audit log + dashboard) where it belongs.
+ *
+ * Shape of `result` comes from `agentCore.run()` (`AgentRunResult`):
+ *   { success: boolean, steps_completed: number, plan_id: string,
+ *     final_result?: unknown }
+ *
+ * We treat it as `unknown` here because slack-routes.ts intentionally
+ * doesn't import agent-core types — extract the fields defensively.
+ */
+function buildSlackAgentReplySummary(params: {
+  command: string;
+  result: unknown;
+  error?: string;
+}): {
+  title: string;
+  body: string;
+  plan_id?: string;
+  steps_completed?: number;
+  success?: boolean;
+  dashboard_url?: string;
+} {
+  const dashboard = (process.env.RHODES_DASHBOARD_URL ?? "").replace(/\/+$/, "");
+
+  if (params.error) {
+    return {
+      title: "RHODES — run failed",
+      body: `I tried to handle *${escapeSlackText(params.command)}* but hit an error: ${escapeSlackText(params.error.slice(0, 280))}.`,
+    };
+  }
+
+  const result = (params.result ?? {}) as Record<string, unknown>;
+  const planId = typeof result["plan_id"] === "string" ? (result["plan_id"] as string) : undefined;
+  const stepsCompleted =
+    typeof result["steps_completed"] === "number" ? (result["steps_completed"] as number) : undefined;
+  const success = typeof result["success"] === "boolean" ? (result["success"] as boolean) : undefined;
+
+  const planUrl = dashboard && planId ? `${dashboard}/?plan=${encodeURIComponent(planId)}` : undefined;
+
+  // Title varies by outcome — keep it short, mono in the rendered Block Kit.
+  const title =
+    success === false
+      ? "RHODES — run did not complete cleanly"
+      : success === true
+      ? "RHODES — done"
+      : "RHODES — update";
+
+  // Body reads like a short note from a coworker, not a status report.
+  const parts: string[] = [];
+  parts.push(`I just handled *${escapeSlackText(params.command)}*.`);
+  if (typeof stepsCompleted === "number") {
+    parts.push(`${stepsCompleted} step${stepsCompleted === 1 ? "" : "s"} ran${success === false ? " (with a failure along the way)" : ""}.`);
+  }
+  if (planUrl) {
+    parts.push(`Plan details: <${planUrl}|open in dashboard>.`);
+  } else if (planId) {
+    parts.push(`Plan id: \`${planId}\`.`);
+  }
+
+  return {
+    title,
+    body: parts.join(" "),
+    plan_id: planId,
+    steps_completed: stepsCompleted,
+    success,
+    dashboard_url: planUrl,
+  };
+}
+
+function escapeSlackText(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

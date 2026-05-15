@@ -65,18 +65,28 @@ export class SlackProvider implements AlertProvider {
    */
   private static readonly TEAM_CHANNEL_KINDS: ReadonlySet<string> = new Set([
     "approval_needed",
-    "plan_generated",
     "execution_failed",
     "health_check_failed",
     "ticket_opened",
     "ticket_resolved",
     "ticket_closed",
   ]);
+  // plan_generated is INTENTIONALLY OMITTED from team-channel kinds —
+  // it's noise on a public channel. The agent posts plan/result back
+  // as a *thread reply* to the originating @-mention or slash command
+  // (slack_thread_ts in context), which bypasses this filter.
 
   async send(alert: Alert): Promise<NotificationDeliveryResult> {
+    // Thread-targeted messages bypass the team-channel allowlist — if
+    // we have a thread_ts, this is a deliberate reply scoped to a
+    // specific operator conversation, not channel spam.
+    const threadTs = alert.context?.["slack_thread_ts"];
+    const isThreadReply = typeof threadTs === "string" && threadTs.length > 0;
+
     // Team-channel filter — drop step-by-step success spam (still
     // logged to console + audited via the event bus; just not Slack).
-    if (!SlackProvider.TEAM_CHANNEL_KINDS.has(alert.kind)) {
+    // Bypassed when the alert is bound to a thread (operator-scoped).
+    if (!isThreadReply && !SlackProvider.TEAM_CHANNEL_KINDS.has(alert.kind)) {
       return {
         delivered: true,
         provider: this.id,
@@ -88,13 +98,18 @@ export class SlackProvider implements AlertProvider {
     const blocks = this.buildBlocks(alert);
     const fallbackText = alert.title;
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       channel,
       text: fallbackText,
       blocks,
       unfurl_links: false,
       unfurl_media: false,
     };
+    // When the alert is bound to a thread, thread it. Slack uses the
+    // `thread_ts` field to attach the reply under the parent message.
+    if (isThreadReply) {
+      payload["thread_ts"] = threadTs;
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);

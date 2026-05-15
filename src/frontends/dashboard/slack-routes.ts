@@ -83,6 +83,21 @@ export interface SlackRoutesContext {
     text: string,
     slackUserId: string,
   ) => unknown | undefined;
+  /** Post the agent's reply back to the originating Slack thread.
+   *  Called after `runAgentCommand` resolves (or rejects). The bot
+   *  behaves like an employee — one consolidated message in the
+   *  thread, not stepwise event spam. */
+  postSlackThreadReply?: (params: {
+    channel: string;
+    thread_ts: string;
+    command: string;
+    /** Agent run result if the agent completed. Shape comes from
+     *  `agentCore.run()`; we treat it as `unknown` here since
+     *  slack-routes.ts shouldn't import agent-core types. */
+    result: unknown;
+    /** Set when the agent path threw. Mutually exclusive with `result`. */
+    error?: string;
+  }) => Promise<void>;
 }
 
 export type TicketStatusFilter =
@@ -912,7 +927,11 @@ function recordAudit(
 }
 
 /** Wrap runAgentCommand so a thrown error in the agent path can't crash
- *  the dispatcher Promise (fire-and-forget). */
+ *  the dispatcher Promise (fire-and-forget). When the meta carries a
+ *  Slack thread, ALSO post the agent's reply back into that thread so
+ *  the operator gets a clean conversational answer instead of stepwise
+ *  event spam. The bot behaves like an employee — one message in, one
+ *  message out, scoped to the thread. */
 function runAgentSafely(
   ctx: SlackRoutesContext,
   command: string,
@@ -920,8 +939,45 @@ function runAgentSafely(
 ): Promise<unknown> {
   return Promise.resolve()
     .then(() => ctx.runAgentCommand(command, meta))
+    .then((result) => {
+      // Post the final reply back into the thread, if we have one.
+      if (
+        ctx.postSlackThreadReply &&
+        meta.slack_channel &&
+        meta.slack_thread_ts
+      ) {
+        ctx
+          .postSlackThreadReply({
+            channel: meta.slack_channel,
+            thread_ts: meta.slack_thread_ts,
+            command,
+            result,
+          })
+          .catch((err) => {
+            console.error("[slack-routes] postSlackThreadReply failed:", err);
+          });
+      }
+      return result;
+    })
     .catch((err) => {
       console.error("[slack-routes] runAgentCommand failed:", err);
+      // Best-effort thread-reply with the failure so the operator
+      // isn't left hanging waiting for an answer that never comes.
+      if (
+        ctx.postSlackThreadReply &&
+        meta.slack_channel &&
+        meta.slack_thread_ts
+      ) {
+        ctx
+          .postSlackThreadReply({
+            channel: meta.slack_channel,
+            thread_ts: meta.slack_thread_ts,
+            command,
+            result: undefined,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          .catch(() => undefined);
+      }
       return undefined;
     });
 }
