@@ -41,6 +41,7 @@ import type { AIConfig } from "../../agent/llm.js";
 import type { EventBus } from "../../agent/events.js";
 import type { IncidentManager } from "../../healing/incidents.js";
 import type { Notifier } from "../../notifications/notifier.js";
+import { getSession } from "./auth.js";
 import { AgentEventType } from "../../types.js";
 
 export interface TicketRouterContext {
@@ -213,8 +214,18 @@ class TicketRouterImpl implements TicketRouter {
       return;
     }
 
+    // Prefer the authenticated session username over the legacy
+    // "operator" default — so the dashboard comment timeline reads
+    // "pranav" instead of an anonymous role label. Explicit
+    // body.author still wins if a tool wants to override (e.g.
+    // automated systems posting on behalf of a human).
+    const sessionUsername = getSession(req)?.username;
+    const author =
+      body.author?.trim() ||
+      sessionUsername ||
+      "operator";
     const comment = this.ctx.store.addComment(ticketId, {
-      author: body.author?.trim() || "operator",
+      author,
       body: body.body.trim(),
       source: "dashboard",
     });

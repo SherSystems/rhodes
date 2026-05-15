@@ -182,6 +182,39 @@ describe("tickets routes", () => {
     expect(out.comment.author).toBe("operator");
   });
 
+  it("POST /api/tickets/:id/comments uses the authenticated session username as author", async () => {
+    // Regression: dashboard comments defaulted to a hardcoded
+    // "operator" string even when an authenticated admin session was
+    // attached. Now we resolve the session username (signed JWT in the
+    // rhodes_session cookie) and use it as author. Caught during the
+    // v0.5.0 demo on 2026-05-15 — Pranav's dashboard comment on 015
+    // ("Test complete") rendered as "operator" instead of "pranav".
+    const { ticketId } = seedTicket(env.incidents, env.store);
+    // Stub auth by setting RHODES_AUTH_DISABLED so we skip the cookie
+    // gate — but the comment handler reads the session anyway via the
+    // raw cookie. Easier: forge a JWT cookie. We do this by importing
+    // signSession and constructing the request with that cookie value.
+    const { signSession } = await import("../../src/auth/session.js");
+    const jwt = signSession({ username: "pranav", role: "admin" }, 120);
+    const req = makeReq(
+      "POST",
+      `/api/tickets/${ticketId}/comments`,
+      JSON.stringify({ body: "checked from the dashboard" }),
+    );
+    (req as unknown as { headers: Record<string, string> }).headers = {
+      cookie: `rhodes_session=${jwt}`,
+    };
+    const res = new MockResponse();
+    await env.router.dispatch(
+      req,
+      res as unknown as ServerResponse,
+      new URL(`/api/tickets/${ticketId}/comments`, "http://localhost").pathname,
+    );
+    expect(res.statusCode).toBe(200);
+    const out = res.json() as { comment: { author: string } };
+    expect(out.comment.author).toBe("pranav");
+  });
+
   it("POST /api/tickets/:id/comments rejects empty bodies", async () => {
     const { ticketId } = seedTicket(env.incidents, env.store);
     const { status, body } = await dispatch(
