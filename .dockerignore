@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+coverage/
+.env
+*.tsbuildinfo
+*.log
+.DS_Store
+.claude/worktrees/
+yc-session.md

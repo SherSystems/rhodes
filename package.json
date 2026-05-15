@@ -53,6 +53,7 @@
     "@azure/arm-storage": "^19.1.0",
     "@azure/identity": "^4.13.1",
     "@azure/storage-blob": "^12.31.0",
+    "@flydotio/litestream": "^1.0.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^11.7.0",
@@ -72,5 +73,8 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dockerfile": {
+    "litestream": true
   }
 }
