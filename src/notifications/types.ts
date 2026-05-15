@@ -17,7 +17,12 @@ export type AlertKind =
    *  title, severity badge, labels and a "View ticket" link. The
    *  resulting Slack message ts is captured as `slack_thread_ts` on
    *  the Ticket so subsequent comments thread under it. */
-  | "ticket_opened";
+  | "ticket_opened"
+  /** Engineering ticket resolved — Block Kit message threaded under
+   *  the original ticket-opened DM (via `slack_thread_ts` +
+   *  `slack_channel` in context), carrying the LLM postmortem and
+   *  the state-transition resolution string. */
+  | "ticket_resolved";
 
 export interface Alert {
   /** Brief one-line subject; surfaces in Telegram preview. */

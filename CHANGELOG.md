@@ -7,6 +7,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **Resolved-ticket DM as a thread reply on the original ticket-opened message.** When an incident resolves, RHODES now posts a `ticket_resolved` Slack alert (rendered with a green ✅ "RESOLVED" header, the LLM postmortem in the body, and a "View ticket" deep link) threaded under the originating `ticket_opened` DM, using the `slack_thread_ts` / `slack_channel` captured at open time. Previously `onTicketResolved` only stored the postmortem on the ticket — no DM ever fired, leaving the operator without confirmation that the VM had recovered. Wired in `src/frontends/dashboard/tickets-routes.ts` (call site) + `src/notifications/providers/slack.ts` (new `ticketResolvedBlocks` renderer).
+
 ### Fixed
 
 - **`vm_status` incidents now resolve when the VM returns to `running`.** Two interacting bugs in `IncidentCoordinator.resolveRecoveredIncidents` left `running → stopped` incidents stuck in HEALING forever, preventing the postmortem-on-resolve hook from firing and starving the dashboard ticket lifecycle:

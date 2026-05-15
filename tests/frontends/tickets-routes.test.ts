@@ -302,6 +302,51 @@ describe("tickets routes", () => {
     const comment = env.router.appendSlackThreadComment("nope.0000", "msg", "U1");
     expect(comment).toBeUndefined();
   });
+
+  it("onTicketResolved posts a Slack thread reply on the original ticket DM", async () => {
+    // Regression: in v0.5.0-pre, onTicketResolved only generated the
+    // postmortem text and stored it on the ticket — no DM ever fired
+    // when the VM recovered, so the operator was left wondering. Fix
+    // sends a `ticket_resolved` Slack alert via the captured thread_ts
+    // so the resolve summary lands as a thread reply on the original
+    // ticket-opened DM. See CHANGELOG for the live Jellyfin demo.
+    const { dbPath, dataDir } = fresh();
+    const bus = new EventBus();
+    const incidents = new IncidentManager(bus, dataDir);
+    const store = new TicketStore(dbPath);
+    const sendOnSlack = vi.fn().mockResolvedValue({ delivered: true, provider: "slack" });
+    const router = createTicketRouter({
+      store,
+      incidents,
+      eventBus: bus,
+      // Minimal Notifier shape — only sendOnSlack is exercised here.
+      notifier: { sendOnSlack } as unknown as Parameters<typeof createTicketRouter>[0]["notifier"],
+    });
+
+    const incident = incidents.open({
+      type: "threshold",
+      severity: "critical",
+      metric: "vm_status",
+      labels: { vmid: "101", node: "pranavlab", name: "JellyFinServer", runtime_status: "stopped" },
+      value: 0,
+      description: "VM JellyFinServer on pranavlab stopped unexpectedly",
+    });
+    const ticket = store.ensureForIncident(incident);
+    store.bindSlackThread(ticket.ticket_id, "D0B41UW8A6A", "1778869257.827579");
+
+    incidents.resolve(incident.id, "VM JellyFinServer state recovered: stopped → running");
+    const resolved = incidents.getById(incident.id)!;
+    const refreshedTicket = store.findByTicketId(ticket.ticket_id)!;
+    await router.onTicketResolved(refreshedTicket, resolved);
+
+    expect(sendOnSlack).toHaveBeenCalledTimes(1);
+    const alert = sendOnSlack.mock.calls[0][0];
+    expect(alert.kind).toBe("ticket_resolved");
+    expect(alert.title).toContain(ticket.ticket_id);
+    expect(alert.context.slack_thread_ts).toBe("1778869257.827579");
+    expect(alert.context.slack_channel).toBe("D0B41UW8A6A");
+    expect(alert.context.ticket_id).toBe(ticket.ticket_id);
+  });
 });
 
 // Silence unused-vi import in environments where vi is only available via globals.

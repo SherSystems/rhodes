@@ -195,6 +195,8 @@ export class SlackProvider implements AlertProvider {
         return this.healthFailedBlocks(alert);
       case "ticket_opened":
         return this.ticketOpenedBlocks(alert);
+      case "ticket_resolved":
+        return this.ticketResolvedBlocks(alert);
       case "event":
       default:
         return this.eventBlocks(alert);
@@ -245,6 +247,61 @@ export class SlackProvider implements AlertProvider {
             type: "button",
             text: { type: "plain_text", text: "View ticket", emoji: false },
             action_id: "rhodes_view_ticket",
+            url: this.buildTicketUrl(ticketId),
+          },
+        ],
+      });
+    }
+
+    return blocks;
+  }
+
+  private ticketResolvedBlocks(alert: Alert): unknown[] {
+    const ticketId = (alert.context?.["ticket_id"] as string | undefined) ?? "";
+    const resolution = (alert.context?.["resolution"] as string | undefined) ?? "";
+    const postmortem = (alert.context?.["postmortem"] as string | undefined) ?? "";
+
+    // Prefer the LLM postmortem as the section body; fall back to the
+    // raw resolution string if the LLM timed out or aiConfig was absent.
+    const body = postmortem.trim().length > 0
+      ? postmortem
+      : (resolution.trim().length > 0 ? resolution : alert.body);
+
+    const blocks: unknown[] = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `${ticketId || "RHODES ticket"} — resolved`.slice(0, 150),
+          emoji: false,
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `:white_check_mark: *RESOLVED*\n${escapeMrkdwn(truncate(body, 1500))}`,
+        },
+      },
+    ];
+
+    if (resolution && resolution !== body) {
+      blocks.push({
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: `*State change* ${escapeMrkdwn(truncate(resolution, 200))}` },
+        ],
+      });
+    }
+
+    if (this.dashboardUrl && ticketId) {
+      blocks.push({
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "View ticket", emoji: false },
+            action_id: "rhodes_view_ticket_resolved",
             url: this.buildTicketUrl(ticketId),
           },
         ],

@@ -363,13 +363,51 @@ class TicketRouterImpl implements TicketRouter {
     incident: Incident,
   ): Promise<void> {
     this.broadcastTicketUpdate("ticket_resolved", ticket);
-    if (!this.ctx.aiConfig || !this.ctx.aiConfig.apiKey) return;
-    const result = await generatePostmortem(
-      { ticket, incident },
-      this.ctx.aiConfig,
-      { timeoutMs: this.ctx.postmortemTimeoutMs },
-    );
-    this.applyPostmortemResult(ticket.ticket_id, result);
+
+    let postmortemText: string | undefined;
+    let postmortemNote: string | undefined;
+    if (this.ctx.aiConfig && this.ctx.aiConfig.apiKey) {
+      const result = await generatePostmortem(
+        { ticket, incident },
+        this.ctx.aiConfig,
+        { timeoutMs: this.ctx.postmortemTimeoutMs },
+      );
+      this.applyPostmortemResult(ticket.ticket_id, result);
+      postmortemText = result.text;
+      postmortemNote = result.note;
+    }
+
+    // Post the resolve summary as a thread reply on the original
+    // ticket-opened DM (or a fresh DM if the open never bound a thread).
+    // This is the v0.5.0 fix for "no summary DM lands when the VM
+    // recovers" — onTicketOpened sent the open card, but the resolve
+    // path used to update the DB and exit silently. See CHANGELOG.
+    if (!this.ctx.notifier) return;
+    const refreshed = this.ctx.store.findByTicketId(ticket.ticket_id) ?? ticket;
+    const body =
+      postmortemText ??
+      postmortemNote ??
+      (incident.resolution ?? "Incident resolved.");
+    const context: Record<string, unknown> = {
+      ticket_id: ticket.ticket_id,
+      incident_id: incident.id,
+      severity: incident.severity,
+      labels: incident.labels,
+      resolution: incident.resolution,
+      postmortem: postmortemText,
+    };
+    if (refreshed.slack_thread_ts) {
+      context["slack_thread_ts"] = refreshed.slack_thread_ts;
+    }
+    if (refreshed.slack_channel) {
+      context["slack_channel"] = refreshed.slack_channel;
+    }
+    await this.ctx.notifier.sendOnSlack({
+      title: `${ticket.ticket_id} resolved — ${ticket.title}`,
+      body,
+      kind: "ticket_resolved",
+      context,
+    });
   }
 
   // ── Slack glue ────────────────────────────────────────────
