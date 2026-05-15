@@ -56,7 +56,34 @@ export class SlackProvider implements AlertProvider {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
+  /**
+   * Alert kinds that get published to the Slack team channel. Anything
+   * else (especially `execution_complete` per-step success spam) is
+   * silently dropped — Slack is the team's *actionable* surface, not a
+   * raw event firehose. The primary provider (Supra → Telegram for the
+   * founder's heartbeat) still receives all kinds.
+   */
+  private static readonly TEAM_CHANNEL_KINDS: ReadonlySet<string> = new Set([
+    "approval_needed",
+    "plan_generated",
+    "execution_failed",
+    "health_check_failed",
+    "ticket_opened",
+    "ticket_resolved",
+    "ticket_closed",
+  ]);
+
   async send(alert: Alert): Promise<NotificationDeliveryResult> {
+    // Team-channel filter — drop step-by-step success spam (still
+    // logged to console + audited via the event bus; just not Slack).
+    if (!SlackProvider.TEAM_CHANNEL_KINDS.has(alert.kind)) {
+      return {
+        delivered: true,
+        provider: this.id,
+        response: { suppressed: true, reason: `kind '${alert.kind}' not in team-channel allowlist` },
+      };
+    }
+
     const channel = this.resolveChannel(alert);
     const blocks = this.buildBlocks(alert);
     const fallbackText = alert.title;
