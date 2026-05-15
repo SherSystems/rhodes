@@ -1,0 +1,47 @@
+# ============================================================
+# RHODES Slack Shim — Fly.io app configuration
+#
+# Public-facing edge that receives Slack callbacks at
+# https://sher-rhodes-slack.fly.dev and relays them into the
+# operator's tailnet to the RHODES dashboard.
+#
+# Sized for free tier — single shared-cpu-1x machine, scales to
+# zero when idle, wakes on incoming HTTP. Slack tolerates the
+# cold-start latency (their interactivity SLA is 3s, our worst-
+# case cold start with tailscaled join is ~1.5s).
+# ============================================================
+
+app = "sher-rhodes-slack"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  TS_HOSTNAME = "rhodes-slack-shim"
+  # RHODES_URL, SLACK_SIGNING_SECRET, and TS_AUTHKEY come from `fly secrets set`.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[deploy]
+  strategy = "immediate"
