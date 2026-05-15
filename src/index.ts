@@ -257,6 +257,10 @@ async function main() {
   // to the EventBus so autopilot/incident/health hooks just emit
   // events and the bridge takes care of delivery. The notifier is
   // safe to construct even when provider === "none".
+  const slackChannelByKind = parseSlackChannelMap(config.notifications.slackChannelByKindJson);
+  const slackConfigured = Boolean(
+    config.notifications.slackBotToken && config.notifications.slackDefaultChannel,
+  );
   const notifier = new Notifier({
     provider: config.notifications.provider,
     supra: {
@@ -267,12 +271,21 @@ async function main() {
       botToken: config.notifications.telegramBotToken,
       chatId: config.notifications.telegramChatId,
     },
+    slack: slackConfigured
+      ? {
+          botToken: config.notifications.slackBotToken,
+          defaultChannel: config.notifications.slackDefaultChannel,
+          channelByKind: slackChannelByKind,
+          dashboardUrl: config.notifications.dashboardUrl || undefined,
+        }
+      : undefined,
   });
   attachAlertBridge(eventBus, {
     notifier,
     dashboardUrl: config.notifications.dashboardUrl || undefined,
   });
-  console.log(`[rhodes] Alert provider: ${notifier.provider.id}`);
+  const notifierProviders = notifier.getStatus().providers.join(" + ");
+  console.log(`[rhodes] Alert provider${notifier.getStatus().providers.length > 1 ? "s" : ""}: ${notifierProviders}`);
 
   // ── /healthz endpoint: always on, even in cli mode. Useful for
   // systemd ExecStartPost smoke tests and external uptime probes.
@@ -625,3 +638,31 @@ main().catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
+
+/**
+ * Parse `RHODES_SLACK_CHANNEL_BY_KIND` env (a JSON object mapping alert
+ * kind → channel id). Returns an empty object if unset or malformed —
+ * we don't want a malformed env var to crash startup.
+ */
+function parseSlackChannelMap(raw: string | undefined): Record<string, string> | undefined {
+  if (!raw || raw.trim() === "") return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof k === "string" && typeof v === "string") out[k] = v;
+      }
+      return out;
+    }
+    console.warn(
+      `[rhodes] RHODES_SLACK_CHANNEL_BY_KIND must be a JSON object {kind: channel_id}; ignoring.`,
+    );
+    return undefined;
+  } catch (err) {
+    console.warn(
+      `[rhodes] RHODES_SLACK_CHANNEL_BY_KIND is not valid JSON; ignoring. (${err instanceof Error ? err.message : String(err)})`,
+    );
+    return undefined;
+  }
+}

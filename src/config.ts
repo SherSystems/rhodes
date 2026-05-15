@@ -178,12 +178,23 @@ const AutopilotConfigSchema = z.object({
 });
 
 const NotificationsConfigSchema = z.object({
-  provider: z.enum(["none", "supra", "telegram_direct"]).default("none"),
+  provider: z.enum(["none", "supra", "telegram_direct", "slack"]).default("none"),
   supraUrl: z.string().default("http://localhost:3100"),
   supraUserId: z.string().default("rhodes-bot"),
   telegramBotToken: z.string().default(""),
   telegramChatId: z.string().default(""),
   dashboardUrl: z.string().default(""),
+  // Slack — when botToken + defaultChannel are set, Slack is attached
+  // (either as the primary provider or as a secondary in addition to
+  // the primary, depending on `provider`).
+  slackBotToken: z.string().default(""),
+  slackDefaultChannel: z.string().default(""),
+  slackSigningSecret: z.string().default(""),
+  slackAppId: z.string().default(""),
+  slackClientId: z.string().default(""),
+  slackClientSecret: z.string().default(""),
+  // Optional per-kind channel routing as JSON: '{"approval_needed":"C0...","incident":"C0..."}'
+  slackChannelByKindJson: z.string().default(""),
 });
 
 const HealthConfigSchema = z.object({
@@ -396,12 +407,20 @@ export function getConfig(): Config {
           | "none"
           | "supra"
           | "telegram_direct"
+          | "slack"
           | undefined) ?? undefined,
       supraUrl: process.env.SUPRA_URL,
       supraUserId: process.env.RHODES_SUPRA_USER_ID,
       telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
       telegramChatId: process.env.TELEGRAM_CHAT_ID,
       dashboardUrl: process.env.DASHBOARD_URL ?? process.env.RHODES_DASHBOARD_URL,
+      slackBotToken: process.env.RHODES_SLACK_BOT_TOKEN,
+      slackDefaultChannel: process.env.RHODES_SLACK_DEFAULT_CHANNEL,
+      slackSigningSecret: process.env.RHODES_SLACK_SIGNING_SECRET,
+      slackAppId: process.env.RHODES_SLACK_APP_ID,
+      slackClientId: process.env.RHODES_SLACK_CLIENT_ID,
+      slackClientSecret: process.env.RHODES_SLACK_CLIENT_SECRET,
+      slackChannelByKindJson: process.env.RHODES_SLACK_CHANNEL_BY_KIND,
     },
     health: {
       port: process.env.RHODES_HEALTH_PORT,

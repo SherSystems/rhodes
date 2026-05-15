@@ -12,6 +12,7 @@ export type {
 export { Notifier, type NotifierOptions, type NotifierStatus } from "./notifier.js";
 export { NoneProvider } from "./providers/none.js";
 export { SupraProvider, type SupraProviderOptions } from "./providers/supra.js";
+export { SlackProvider, type SlackProviderOptions } from "./providers/slack.js";
 export {
   TelegramDirectProvider,
   type TelegramDirectProviderOptions,
@@ -47,6 +48,9 @@ let _notifier: Notifier | null = null;
 export function getNotifier(): Notifier {
   if (_notifier) return _notifier;
   const cfg = getConfig();
+  const slackConfigured = Boolean(
+    cfg.notifications.slackBotToken && cfg.notifications.slackDefaultChannel,
+  );
   _notifier = new Notifier({
     provider: cfg.notifications.provider,
     supra: {
@@ -57,6 +61,13 @@ export function getNotifier(): Notifier {
       botToken: cfg.notifications.telegramBotToken,
       chatId: cfg.notifications.telegramChatId,
     },
+    slack: slackConfigured
+      ? {
+          botToken: cfg.notifications.slackBotToken,
+          defaultChannel: cfg.notifications.slackDefaultChannel,
+          dashboardUrl: cfg.notifications.dashboardUrl || undefined,
+        }
+      : undefined,
   });
   return _notifier;
 }
