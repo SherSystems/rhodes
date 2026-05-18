@@ -105,8 +105,12 @@ describe("provider capability surface — uniform invariants", () => {
         let invocation: Promise<unknown>;
         switch (method) {
           case "evacuateWorkload":
+            // Use the proper host-id format so providers that have
+            // shipped this verb (proxmox v0.7.1.2) hit their
+            // requireClient guard rather than failing earlier on
+            // a malformed id parse.
             invocation = impl.evacuateWorkload({
-              targetId: `${provider}:vm:test`,
+              targetId: `${provider}:${provider}_node:test`,
               provider,
               mode: "live_migrate",
             });

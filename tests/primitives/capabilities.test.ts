@@ -126,13 +126,16 @@ describe("proxmox capabilities", () => {
     expect(lower).toMatch(/emulated|ha cordon|cordon/);
   });
 
-  it("unshipped verbs throw PrimitiveNotImplemented (v0.7.1.2+ pending)", async () => {
-    // evacuateWorkload, remediateHost, rollback are still stubs per
-    // the v0.7.1.1 scope. enterMaintenance + exitMaintenance got real
-    // bodies in v0.7.1.1 — verified separately in proxmox-primitives.test.ts.
+  it("unshipped verbs throw PrimitiveNotImplemented (v0.7.1.3+ pending)", async () => {
+    // remediateHost + rollback still stubs.
+    // enterMaintenance + exitMaintenance shipped in v0.7.1.1 — see proxmox-primitives.test.ts.
+    // evacuateWorkload shipped in v0.7.1.2 — see proxmox-evacuate.test.ts (the default
+    //   in-process primitives have no client, so evacuateWorkload throws
+    //   PrimitiveNotImplemented at the requireClient() guard, which IS the
+    //   expected stub behavior for the global registry).
     await expect(
       proxmoxPrimitives.evacuateWorkload({
-        targetId: "proxmox:proxmox_vm:200",
+        targetId: "proxmox:proxmox_node:pve1",
         provider: "proxmox",
         mode: "live_migrate",
       }),

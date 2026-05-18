@@ -58,6 +58,7 @@ import {
   type EnterMaintenanceInput,
   type EvacuateWorkloadInput,
   type ExitMaintenanceInput,
+  type PrimitiveMethod,
   type PrimitiveResult,
   type Primitives,
   type ProviderCapabilities,
@@ -71,12 +72,37 @@ const PROVIDER: GraphProvider = "proxmox";
  * Minimal subset of the real ProxmoxClient that the primitives need.
  * Structural — the real client satisfies this without modification.
  * Tests inject a fake.
+ *
+ * Methods are added as each v0.7.1.x phase needs them. Adapter
+ * mismatches (real client missing a method) surface at bootstrap
+ * configureProxmoxPrimitives() — not at first primitive call.
  */
 export interface ProxmoxPrimitivesClient {
-  // Methods used by evacuateWorkload / remediateHost / rollback land
-  // in v0.7.1.2+. Listed here so each phase can extend without
-  // breaking the interface mid-stream.
-  getNodeStatus?(node: string): Promise<unknown>;
+  /** Cluster nodes with their online/offline status. */
+  getNodes?(): Promise<Array<{ node: string; status: string }>>;
+  /**
+   * VMs on a specific node. Each entry should have at least
+   * `vmid`, `name`, `status`, optional `type` ('qemu'|'lxc') and
+   * `template`.
+   */
+  getVMs?(node: string): Promise<
+    Array<{
+      vmid: number;
+      name: string;
+      status: string;
+      type?: "qemu" | "lxc";
+      template?: boolean;
+      node?: string;
+    }>
+  >;
+  /** Live or cold migrate a QEMU VM. Returns the Proxmox UPID. */
+  migrateVM?(params: {
+    node: string;
+    vmid: number;
+    target: string;
+    online?: boolean;
+    with_local_disks?: boolean;
+  }): Promise<string>;
 }
 
 export interface ProxmoxPrimitivesDeps {
@@ -165,12 +191,115 @@ export function createProxmoxPrimitives(
     async evacuateWorkload(
       input: EvacuateWorkloadInput,
     ): Promise<PrimitiveResult> {
-      void input;
-      throw new PrimitiveNotImplemented(
-        PROVIDER,
-        "evacuateWorkload",
-        "v0.7.1.2",
+      const sourceNode = nodeNameFromHostId(input.targetId);
+      const client = requireClient(deps.client, "evacuateWorkload");
+      requireMethod(client, "getVMs", "evacuateWorkload");
+      requireMethod(client, "getNodes", "evacuateWorkload");
+      requireMethod(client, "migrateVM", "evacuateWorkload");
+
+      // 1. List workloads on the source node, filter to running non-templates.
+      const allVms = await client.getVMs!(sourceNode);
+      const running = allVms.filter(
+        (vm) => vm.status === "running" && !vm.template,
       );
+      if (running.length === 0) {
+        return {
+          success: true,
+          message: `no running workloads on '${sourceNode}'`,
+          data: { sourceNode, migrated: 0, details: [] },
+        };
+      }
+
+      // 2. Pick destination candidates (round-robin across remaining online nodes).
+      let candidates: string[];
+      if (input.destination) {
+        candidates = [input.destination];
+      } else {
+        const nodes = await client.getNodes!();
+        candidates = nodes
+          .filter((n) => n.node !== sourceNode && n.status === "online")
+          .map((n) => n.node);
+      }
+      if (candidates.length === 0) {
+        throw new Error(
+          `evacuateWorkload: no online destination nodes available ` +
+            `(source='${sourceNode}', mode='${input.mode}'). ` +
+            `Add a second node to the cluster or specify destination explicitly.`,
+        );
+      }
+
+      // 3. Migrate each VM. Round-robin across candidates for load distribution.
+      type Result = {
+        vmid: number;
+        type: "qemu" | "lxc" | "unknown";
+        to: string;
+        upid?: string;
+        error?: string;
+      };
+      const results: Result[] = [];
+      let candidateIdx = 0;
+
+      for (const vm of running) {
+        const target = candidates[candidateIdx % candidates.length];
+        candidateIdx++;
+        const vmType = vm.type ?? "unknown";
+
+        // LXC live migration is not supported by Proxmox (cold-only).
+        // Our existing client.migrateVM hits the /qemu/ path; LXC
+        // would need a separate /lxc/<vmid>/migrate endpoint we don't
+        // wrap yet. Surface the limitation explicitly.
+        if (vmType === "lxc") {
+          results.push({
+            vmid: vm.vmid,
+            type: "lxc",
+            to: target,
+            error:
+              "LXC container migration is not supported in v0.7.1.2 " +
+              "(requires client.migrateLXC — track as follow-up)",
+          });
+          continue;
+        }
+
+        try {
+          const wantLive = input.mode === "live_migrate";
+          const upid = await client.migrateVM!({
+            node: sourceNode,
+            vmid: vm.vmid,
+            target,
+            online: wantLive,
+            with_local_disks: true,
+          });
+          results.push({ vmid: vm.vmid, type: vmType, to: target, upid });
+        } catch (err) {
+          results.push({
+            vmid: vm.vmid,
+            type: vmType,
+            to: target,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const failed = results.filter((r) => r.error);
+      if (failed.length > 0) {
+        const details = failed
+          .map((f) => `vmid=${f.vmid} type=${f.type}: ${f.error}`)
+          .join("; ");
+        throw new Error(
+          `evacuateWorkload: ${failed.length}/${results.length} migrations failed on '${sourceNode}'. ${details}`,
+        );
+      }
+
+      return {
+        success: true,
+        message: `evacuated ${results.length} workloads from '${sourceNode}'`,
+        data: {
+          sourceNode,
+          migrated: results.length,
+          mode: input.mode,
+          details: results,
+        },
+      };
     },
 
     async remediateHost(
@@ -208,6 +337,44 @@ export const proxmoxPrimitives: Primitives = createProxmoxPrimitives();
 registerPrimitives(PROVIDER, proxmoxPrimitives);
 
 // ── Helpers ────────────────────────────────────────────────
+
+/**
+ * Throws PrimitiveNotImplemented when the primitive needs a wired
+ * client but configureProxmoxPrimitives() hasn't been called.
+ * Returns the client for chaining.
+ */
+function requireClient(
+  client: ProxmoxPrimitivesClient | undefined,
+  verb: PrimitiveMethod,
+): ProxmoxPrimitivesClient {
+  if (!client) {
+    throw new PrimitiveNotImplemented(
+      PROVIDER,
+      verb,
+      "configureProxmoxPrimitives({ client }) at bootstrap",
+    );
+  }
+  return client;
+}
+
+/**
+ * Asserts a structural-client interface method exists at runtime
+ * (the type says `?` since adapters may grow the surface
+ * incrementally; the verb-side wants a concrete failure).
+ */
+function requireMethod<K extends keyof ProxmoxPrimitivesClient>(
+  client: ProxmoxPrimitivesClient,
+  method: K,
+  verb: PrimitiveMethod,
+): void {
+  if (typeof client[method] !== "function") {
+    throw new PrimitiveNotImplemented(
+      PROVIDER,
+      verb,
+      `ProxmoxPrimitivesClient.${String(method)}() — extend the wrapper / client to provide it`,
+    );
+  }
+}
 
 /**
  * Resource.id format for proxmox nodes: `proxmox:proxmox_node:{node}`.
