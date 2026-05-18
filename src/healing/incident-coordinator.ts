@@ -6,6 +6,11 @@ import { AgentEventType } from "../types.js";
 import { IncidentManager } from "./incidents.js";
 import type { Incident } from "./incidents.js";
 import type { TicketStore, TicketRecord } from "./ticket-store.js";
+import type {
+  Attribution,
+  AttributionCorrelator,
+  StateChangeObservation,
+} from "../attribution/index.js";
 
 const ESCALATION_THRESHOLD = 3;
 const ESCALATION_WINDOW_MS = 30 * 60 * 1000;
@@ -37,6 +42,15 @@ export class IncidentCoordinator {
   ticketOpenedHook?: TicketOpenedHook;
   ticketResolvedHook?: TicketResolvedHook;
 
+  /** Optional v0.6.5 attribution layer. When attached, openIncident
+   *  consults the correlator AFTER opening to attach attribution
+   *  context (who/what triggered the state change) to the incident
+   *  bus event. v0 is LOG-ONLY — high-confidence attributions get
+   *  surfaced but don't suppress the incident yet. Suppression is a
+   *  deliberate v0.6.6 follow-up once we've watched the correlator's
+   *  accuracy on real data. */
+  attributionCorrelator?: AttributionCorrelator;
+
   private readonly eventBus: EventBus;
   private readonly inFlightAnomalies: Set<string> = new Set();
   private readonly escalationHistory: Map<string, number[]> = new Map();
@@ -59,6 +73,17 @@ export class IncidentCoordinator {
     this.ticketStore = store;
     this.ticketOpenedHook = hooks.onOpened;
     this.ticketResolvedHook = hooks.onResolved;
+  }
+
+  /** Wire in the v0.6.5 attribution correlator. When attached,
+   *  state_change incidents that map to a recent attribution event
+   *  (operator-initiated shutdown, RHODES-initiated maintenance, etc.)
+   *  get attribution context surfaced via the bus + ticket comment.
+   *  No-op if the anomaly isn't a state_change or no event correlates.
+   *  Suppression policy stays OFF for v0 — caller can act on the
+   *  attribution context themselves while we observe accuracy. */
+  attachAttributionCorrelator(correlator: AttributionCorrelator): void {
+    this.attributionCorrelator = correlator;
   }
 
   beginAnomaly(anomaly: Anomaly): { key: string; acquired: boolean } {
@@ -93,7 +118,45 @@ export class IncidentCoordinator {
       description: anomaly.message,
     });
     this.handleTicketForOpened(incident);
+    this.attributeIncident(incident, anomaly);
     return incident;
+  }
+
+  /** v0.6.5 attribution surface. After an incident is opened, ask the
+   *  correlator if any recent event (operator action, RHODES plan,
+   *  system trigger like DRS) explains the state change. If so, emit
+   *  a bus event so the postmortem / ticket-thread can show "stopped
+   *  by Pranav via Proxmox UI at 14:32" instead of "crashed."
+   *
+   *  Log-only in v0 — does NOT suppress the incident. The correlator's
+   *  shouldSuppress() exists but isn't called from here yet; we'll
+   *  flip it on after observing real-data accuracy for a few weeks. */
+  private attributeIncident(incident: Incident, anomaly: Anomaly): void {
+    if (!this.attributionCorrelator) return;
+    if (anomaly.type !== "state_change") return;
+    const obs = bridgeAnomalyToObservation(anomaly);
+    if (!obs) return;
+    const attribution = this.attributionCorrelator.contextualize(obs);
+    if (!attribution) return;
+    this.emitAttributionEvent(incident, attribution);
+  }
+
+  private emitAttributionEvent(
+    incident: Incident,
+    attribution: Attribution,
+  ): void {
+    const actor = attribution.event.actor;
+    const who = actor.identity ? `${actor.kind} (${actor.identity})` : actor.kind;
+    this.emitEvent(AgentEventType.IncidentAction, {
+      kind: "incident_attribution",
+      incidentId: incident.id,
+      message: `incident attributed: ${who} via ${actor.via ?? "unknown"} — ${attribution.matchReason}`,
+      confidence: attribution.matchConfidence,
+      eventId: attribution.event.id,
+      eventType: attribution.event.eventType,
+      actor,
+      occurredAt: attribution.event.occurredAt,
+    });
   }
 
   /** Allocate (or look up) the Ticket for `incident`, then fire the
@@ -436,4 +499,56 @@ export class IncidentCoordinator {
       data,
     });
   }
+}
+
+/**
+ * Best-effort bridge from an Anomaly (monitoring shape) to a
+ * StateChangeObservation (attribution shape). Returns null when the
+ * anomaly doesn't carry enough info to identify a graph Resource.
+ *
+ * Graph Resource.id convention: `{provider}:{type}:{provider_uid}`.
+ * vm_status anomalies carry labels like `{vmid, node, runtime_status}`
+ * which map to `proxmox:proxmox_vm:{vmid}` (or vsphere when a `moid`
+ * label is present). Permissive: if we can't identify the resource we
+ * return null rather than fabricating — better to miss attribution
+ * than to mis-attribute.
+ */
+export function bridgeAnomalyToObservation(
+  anomaly: Anomaly,
+): StateChangeObservation | null {
+  const labels = anomaly.labels;
+  if (anomaly.metric === "vm_status") {
+    const provider =
+      labels.provider ??
+      (labels.moid ? "vsphere" : labels.vmid ? "proxmox" : null);
+    if (!provider) return null;
+    let resourceId: string | null = null;
+    if (provider === "proxmox" && labels.vmid) {
+      const rtype =
+        labels.workload_type === "container"
+          ? "proxmox_container"
+          : "proxmox_vm";
+      resourceId = `proxmox:${rtype}:${labels.vmid}`;
+    } else if (provider === "vsphere" && labels.moid) {
+      resourceId = `vsphere:vsphere_vm:${labels.moid}`;
+    }
+    if (!resourceId) return null;
+    return {
+      resourceId,
+      fromState: labels.previous_runtime_status ?? "unknown",
+      toState: labels.runtime_status ?? labels.reason ?? "unknown",
+      observedAt: anomaly.detected_at,
+    };
+  }
+  if (anomaly.metric === "host_status") {
+    const provider = labels.provider ?? (labels.moid ? "vsphere" : null);
+    if (!provider || !labels.moid) return null;
+    return {
+      resourceId: `${provider}:${provider}_host:${labels.moid}`,
+      fromState: labels.previous_state ?? "unknown",
+      toState: labels.state ?? "unknown",
+      observedAt: anomaly.detected_at,
+    };
+  }
+  return null;
 }
