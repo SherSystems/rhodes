@@ -60,6 +60,15 @@ import {
   type TicketRouter,
 } from "./tickets-routes.js";
 import { TicketStore } from "../../healing/ticket-store.js";
+import {
+  OrchestratorStore,
+  type UpgradePlan,
+  type UpgradeRun,
+} from "../../orchestrator/index.js";
+import {
+  createOrchestratorRouter,
+  type OrchestratorRouter,
+} from "./orchestrator-routes.js";
 import { parseTicketId } from "../../healing/ticket-ids.js";
 import type { Notifier } from "../../notifications/notifier.js";
 import type { AIConfig } from "../../agent/llm.js";
@@ -182,6 +191,14 @@ export class DashboardServer {
   private ticketRouter: TicketRouter | null = null;
   private ticketStore: TicketStore | null = null;
 
+  /** Orchestrator layer — UpgradePlan/Run persistence + HTTP routes.
+   *  Attached by `attachOrchestratorSystem()` once a data dir is known.
+   *  The actual run-driver (UpgradeRunner) is wired separately at
+   *  bootstrap; the routes expose plan CRUD + approval, and an
+   *  optional onApproved hook the bootstrap uses to kick the runner. */
+  private orchestratorRouter: OrchestratorRouter | null = null;
+  private orchestratorStore: OrchestratorStore | null = null;
+
   constructor(
     private readonly port: number,
     private readonly agentCore: AgentCore,
@@ -274,6 +291,25 @@ export class DashboardServer {
         router.onTicketResolved(ticket, incident),
     });
     return router;
+  }
+
+  /** v0.7.2.1 — orchestrator layer. Plan/Run CRUD + approval routes
+   *  at /api/orchestrator/*. The optional onApproved hook lets the
+   *  bootstrap kick the UpgradeRunner once a plan is approved.
+   *  Idempotent — safe to call twice; second call returns the cached
+   *  router. */
+  attachOrchestratorSystem(options: {
+    dataDir: string;
+    onApproved?: (plan: UpgradePlan, run: UpgradeRun) => void | Promise<void>;
+  }): OrchestratorRouter {
+    if (this.orchestratorRouter) return this.orchestratorRouter;
+    const orchDbPath = join(options.dataDir, "orchestrator.db");
+    this.orchestratorStore = new OrchestratorStore(orchDbPath);
+    this.orchestratorRouter = createOrchestratorRouter({
+      store: this.orchestratorStore,
+      onApproved: options.onApproved,
+    });
+    return this.orchestratorRouter;
   }
 
   attachApprovalGate(gate: ApprovalGate): void {
@@ -568,6 +604,27 @@ export class DashboardServer {
               })
               .catch((err) => {
                 console.error("[DashboardServer] ticket dispatch error:", err);
+                try {
+                  res.writeHead(500, { "Content-Type": "application/json" });
+                  res.end(JSON.stringify({ error: "Internal server error" }));
+                } catch {
+                  // socket may already be closed
+                }
+              });
+            break;
+          }
+          // Orchestrator routes (v0.7.2.1): /api/orchestrator/{plans,runs}/...
+          if (path.startsWith("/api/orchestrator/") && this.orchestratorRouter) {
+            void this.orchestratorRouter
+              .dispatch(req, res, path)
+              .then((handled) => {
+                if (!handled) {
+                  res.writeHead(404, { "Content-Type": "application/json" });
+                  res.end(JSON.stringify({ error: "Not found" }));
+                }
+              })
+              .catch((err) => {
+                console.error("[DashboardServer] orchestrator dispatch error:", err);
                 try {
                   res.writeHead(500, { "Content-Type": "application/json" });
                   res.end(JSON.stringify({ error: "Internal server error" }));

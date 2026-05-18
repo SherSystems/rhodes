@@ -125,6 +125,14 @@ export class OrchestratorStore {
     return rows.map(rowToPlan);
   }
 
+  /** All plans, newest first. Used by the dashboard list endpoint. */
+  listAllPlans(): UpgradePlan[] {
+    const rows = this.db
+      .prepare("SELECT * FROM upgrade_plans ORDER BY created_at DESC")
+      .all() as PlanRow[];
+    return rows.map(rowToPlan);
+  }
+
   recordApproval(planId: string, approvedBy: string): UpgradePlan {
     const at = new Date().toISOString();
     this.db
