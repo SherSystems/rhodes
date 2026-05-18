@@ -57,6 +57,11 @@ import { join } from "path";
 import { mkdirSync, readFileSync } from "fs";
 import { fileURLToPath } from "node:url";
 import { Notifier, attachAlertBridge, HealthzServer } from "./notifications/index.js";
+import { GraphStore, DiscoveryScheduler } from "./graph/index.js";
+import { ProxmoxClient } from "./providers/proxmox/client.js";
+import { ProxmoxGraphWriter } from "./providers/proxmox/graph-writer.js";
+import { VSphereClient } from "./providers/vmware/client.js";
+import { VmwareGraphWriter, type VmwareDiscoveryClient } from "./providers/vmware/graph-writer.js";
 
 // Version is sourced from package.json so we keep a single source of truth.
 const RHODES_VERSION: string = (() => {
@@ -219,6 +224,22 @@ async function main() {
   // Connect all adapters
   await registry.connectAll();
 
+  // ── Graph discovery scheduler (opt-in, OFF by default).
+  // Set RHODES_GRAPH_DISCOVERY=on (or 1/true/yes) to enable. When
+  // ON, instantiate a GraphStore, wrap each configured provider's
+  // client into a DiscoveryWriter, register the writers with the
+  // scheduler, and start it. Per-writer ticks run every 60s and
+  // the manifests_as resolver runs after each pass. When OFF,
+  // none of this runs — no DB open, no background work.
+  const graphDiscovery = bootGraphDiscovery(config);
+  if (graphDiscovery) {
+    console.log(
+      `[rhodes] Graph discovery: ON (${graphDiscovery.writerCount} writer(s) — set RHODES_GRAPH_DISCOVERY=off to disable)`,
+    );
+  } else {
+    console.log("[rhodes] Graph discovery: OFF (set RHODES_GRAPH_DISCOVERY=on to enable)");
+  }
+
   // Initialize agent core
   const agentCore = new AgentCore({
     toolRegistry: registry,
@@ -311,6 +332,16 @@ async function main() {
   const shutdown = async () => {
     console.log("\nShutting down RHODES...");
     runTelemetry.close();
+    if (graphDiscovery) {
+      // Drain in-flight discoveries before closing the store —
+      // otherwise the DB close races writers mid-INSERT.
+      await graphDiscovery.scheduler.stop().catch(() => undefined);
+      try {
+        graphDiscovery.store.close();
+      } catch {
+        // ignore — close races on shutdown are not actionable.
+      }
+    }
     await healthz.stop().catch(() => undefined);
     await registry.disconnectAll();
     process.exit(0);
@@ -662,6 +693,110 @@ main().catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
+
+/**
+ * Stand up the graph discovery scheduler behind RHODES_GRAPH_DISCOVERY.
+ *
+ * Returns `null` when the env var is unset/off (the default) so the
+ * caller can skip the OFF path entirely. When ON, opens the graph
+ * store, wraps each configured provider's client into a
+ * `DiscoveryWriter`, and starts the scheduler.
+ *
+ * We instantiate fresh `ProxmoxClient` / `VSphereClient` instances
+ * here (rather than reaching through the adapters' private clients)
+ * so the writer's data path stays isolated from the adapter's
+ * tool-execution path — a stuck graph poll must not lock up tool calls.
+ */
+function bootGraphDiscovery(
+  config: ReturnType<typeof getConfig>,
+): { scheduler: DiscoveryScheduler; store: GraphStore; writerCount: number } | null {
+  const raw = (process.env.RHODES_GRAPH_DISCOVERY ?? "").trim().toLowerCase();
+  if (!["on", "1", "true", "yes"].includes(raw)) return null;
+
+  const store = new GraphStore();
+  const scheduler = new DiscoveryScheduler(store, {
+    intervalMs: 60_000,
+    runOnBoot: true,
+    resolverEnabled: true,
+  });
+
+  let writerCount = 0;
+
+  if (config.proxmox.tokenId && config.proxmox.tokenSecret) {
+    const pveClient = new ProxmoxClient({
+      host: config.proxmox.host,
+      port: config.proxmox.port,
+      tokenId: config.proxmox.tokenId,
+      tokenSecret: config.proxmox.tokenSecret,
+      allowSelfSignedCerts: config.proxmox.allowSelfSignedCerts,
+    });
+    const pveWriter = new ProxmoxGraphWriter({ store, client: pveClient });
+    scheduler.add({
+      name: "proxmox",
+      register: () => pveWriter.register(),
+      discover: async () => {
+        await pveWriter.discover();
+        return {
+          writer: "proxmox",
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          resourcesUpserted: 0,
+          relationshipsUpserted: 0,
+          errors: [],
+        };
+      },
+    });
+    writerCount++;
+  }
+
+  if (config.vmware.host) {
+    const vsClient = new VSphereClient({
+      host: config.vmware.host,
+      user: config.vmware.user,
+      password: config.vmware.password,
+      insecure: config.vmware.insecure,
+    });
+    // Wrap the base client in the narrowed discovery surface. The base
+    // VSphereClient doesn't expose VM→host or host→cluster placement
+    // (the REST API splits those across endpoints we don't call here),
+    // so return empty placement for v0. The graph still gets every
+    // resource; the `runs_on` and `member_of` edges fill in once the
+    // placement helper lands in v0.6.5.
+    const vsDiscoveryClient: VmwareDiscoveryClient = {
+      listHosts: () => vsClient.listHosts(),
+      listVMs: () => vsClient.listVMs(),
+      listDatastores: () => vsClient.listDatastores(),
+      listClusters: () => vsClient.listClusters(),
+      getVmPlacement: async () => ({ hostId: "", datastoreIds: [] }),
+      getHostPlacement: async () => ({}),
+    };
+    const vcenter = { uid: config.vmware.host, name: config.vmware.host };
+    const vsWriter = new VmwareGraphWriter(store, vsDiscoveryClient, vcenter);
+    scheduler.add({
+      name: "vmware",
+      register: () => vsWriter.registerTypes(),
+      discover: async () => {
+        // vSphere needs an authenticated session before list* calls.
+        if (!vsClient.isConnected()) {
+          await vsClient.createSession();
+        }
+        await vsWriter.discover();
+        return {
+          writer: "vmware",
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          resourcesUpserted: 0,
+          relationshipsUpserted: 0,
+          errors: [],
+        };
+      },
+    });
+    writerCount++;
+  }
+
+  scheduler.start();
+  return { scheduler, store, writerCount };
+}
 
 /**
  * Parse `RHODES_SLACK_CHANNEL_BY_KIND` env (a JSON object mapping alert
