@@ -58,6 +58,13 @@ import { mkdirSync, readFileSync } from "fs";
 import { fileURLToPath } from "node:url";
 import { Notifier, attachAlertBridge, HealthzServer } from "./notifications/index.js";
 import { GraphStore, DiscoveryScheduler } from "./graph/index.js";
+import {
+  AttributionCorrelator,
+  AttributionStore,
+  EventSourceRegistry,
+  ProxmoxTaskLogSource,
+} from "./attribution/index.js";
+import { proxmoxTaskClientFromCluster } from "./providers/proxmox/task-cluster-adapter.js";
 import { ProxmoxClient } from "./providers/proxmox/client.js";
 import { ProxmoxGraphWriter } from "./providers/proxmox/graph-writer.js";
 import { VSphereClient } from "./providers/vmware/client.js";
@@ -240,6 +247,21 @@ async function main() {
     console.log("[rhodes] Graph discovery: OFF (set RHODES_GRAPH_DISCOVERY=on to enable)");
   }
 
+  // v0.6.5 attribution layer (env-gated like graph discovery). When
+  // ON, event-source pollers start collecting Proxmox task events;
+  // the AttributionCorrelator gets attached to the IncidentCoordinator
+  // below once the healer is constructed. When OFF, no work runs.
+  const attribution = bootAttribution(config);
+  if (attribution) {
+    console.log(
+      `[rhodes] Attribution: ON (${attribution.sourceCount} source(s) — set RHODES_ATTRIBUTION=off to disable)`,
+    );
+  } else {
+    console.log(
+      "[rhodes] Attribution: OFF (set RHODES_ATTRIBUTION=on to enable)",
+    );
+  }
+
   // Initialize agent core
   const agentCore = new AgentCore({
     toolRegistry: registry,
@@ -342,6 +364,14 @@ async function main() {
         // ignore — close races on shutdown are not actionable.
       }
     }
+    if (attribution) {
+      await attribution.registry.stop().catch(() => undefined);
+      try {
+        attribution.store.close();
+      } catch {
+        // ignore — close races on shutdown are not actionable.
+      }
+    }
     await healthz.stop().catch(() => undefined);
     await registry.disconnectAll();
     process.exit(0);
@@ -397,6 +427,13 @@ async function main() {
       });
       healer.start();
       (dashboard as unknown as { healer: HealingOrchestrator }).healer = healer;
+
+      // Attach the AttributionCorrelator to the healer's coordinator
+      // (the boot of attribution above already started the pollers;
+      // this just hooks the correlator into the incident pipeline).
+      if (attribution) {
+        healer.coordinator.attachAttributionCorrelator(attribution.correlator);
+      }
 
       // Ticket layer — long-lived engineering tickets that wrap
       // Incidents. Allocates RHODES-YYYY-NNN ids, posts a Block Kit
@@ -796,6 +833,75 @@ function bootGraphDiscovery(
 
   scheduler.start();
   return { scheduler, store, writerCount };
+}
+
+/**
+ * Stand up the v0.6.5 attribution layer behind RHODES_ATTRIBUTION.
+ *
+ * Returns `null` when the env var is unset/off (the default) so the
+ * caller can skip the OFF path entirely. When ON, opens the
+ * AttributionStore, builds per-substrate event sources (Proxmox task
+ * log via the cluster-tasks adapter; vCenter wires in once vCenter
+ * is back up), starts the registry, and constructs the
+ * AttributionCorrelator that the caller attaches to the
+ * IncidentCoordinator.
+ *
+ * Why isolated client instances (same rationale as bootGraphDiscovery):
+ * the event-source poll loop must not block the adapter's tool-call
+ * path. A stuck Proxmox API can drain attribution without locking up
+ * the tool execution side.
+ *
+ * Without attribution, the RCA path can't tell operator-initiated
+ * stops from real crashes — the v0.5.1 RCA-hallucination bug. With
+ * attribution on, incident events get tagged with
+ * actor.kind/identity/via so the postmortem says e.g. "stopped by
+ * root@pam via proxmox_api at 16:11:30" instead of inventing a
+ * memory-pressure root cause.
+ */
+function bootAttribution(
+  config: ReturnType<typeof getConfig>,
+): {
+  store: AttributionStore;
+  registry: EventSourceRegistry;
+  correlator: AttributionCorrelator;
+  sourceCount: number;
+} | null {
+  const raw = (process.env.RHODES_ATTRIBUTION ?? "").trim().toLowerCase();
+  if (!["on", "1", "true", "yes"].includes(raw)) return null;
+
+  const store = new AttributionStore();
+  const registry = new EventSourceRegistry(store);
+  let sourceCount = 0;
+
+  if (config.proxmox.tokenId && config.proxmox.tokenSecret) {
+    const pveClient = new ProxmoxClient({
+      host: config.proxmox.host,
+      port: config.proxmox.port,
+      tokenId: config.proxmox.tokenId,
+      tokenSecret: config.proxmox.tokenSecret,
+      allowSelfSignedCerts: config.proxmox.allowSelfSignedCerts,
+    });
+    const taskClient = proxmoxTaskClientFromCluster(pveClient);
+    const source = new ProxmoxTaskLogSource({
+      client: taskClient,
+      pollIntervalMs: 30_000,
+    });
+    registry.add(source);
+    sourceCount++;
+  }
+
+  // vCenter event source — wire when vCenter is reachable + the
+  // VSphereClient.queryEventsSince() method exists. Until then,
+  // operator-initiated vSphere actions remain unattributed; once
+  // they're in scope, just `registry.add(new VsphereEventSource(...))`
+  // here.
+
+  // Start collecting in the background. start() returns a promise but
+  // we don't block bootstrap on it — sources stream in.
+  void registry.start();
+
+  const correlator = new AttributionCorrelator(store);
+  return { store, registry, correlator, sourceCount };
 }
 
 /**
