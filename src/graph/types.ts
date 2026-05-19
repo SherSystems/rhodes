@@ -65,6 +65,7 @@ export type ResourceType =
   | "proxmox_vm"
   | "proxmox_container"
   | "proxmox_node"
+  | "proxmox_cluster"
   | "proxmox_storage"
   | "proxmox_network"
   // AWS (placeholders for v0.6.5)
@@ -214,6 +215,7 @@ export const FRESHNESS_WINDOW_SEC: Record<ResourceType, number> = {
   proxmox_vm: 60,
   proxmox_container: 60,
   proxmox_node: 60,
+  proxmox_cluster: 120,
   proxmox_storage: 300,
   proxmox_network: 600,
   // AWS — polled via API + event-driven via CloudWatch

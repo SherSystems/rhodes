@@ -184,6 +184,46 @@ export interface ProxmoxTaskStatus {
   starttime: number;
 }
 
+/**
+ * Response from `/api2/json/version` — the PVE software version
+ * running on the API target. v0.7.3.2 — used by the graph writer
+ * to populate `proxmox_cluster.properties.pveVersion`.
+ */
+export interface ProxmoxVersion {
+  /** Full version string, e.g. "8.0.4". */
+  version: string;
+  /** Major.minor release, e.g. "8.0". */
+  release: string;
+  /** Repository id Proxmox tags this build with. */
+  repoid: string;
+}
+
+/**
+ * Single entry from `/api2/json/cluster/status`. The endpoint returns
+ * a mixed array: one `type: "cluster"` entry (if the node is part of
+ * a real Proxmox cluster) followed by N `type: "node"` entries. On a
+ * standalone single-node install, only the node entries are returned.
+ */
+export interface ProxmoxClusterStatusEntry {
+  type: "cluster" | "node";
+  /** Cluster name (when type=cluster) or node name (when type=node). */
+  name: string;
+  /** Cluster-level only: count of nodes. */
+  nodes?: number;
+  /** Cluster-level only: 1 if quorate. */
+  quorate?: number;
+  /** Cluster-level only: cluster version generation. */
+  version?: number;
+  /** Node-level only: 1 if online. */
+  online?: number;
+  /** Node-level only: 1 if this is the local node. */
+  local?: number;
+  /** Node-level only: stable node id. */
+  nodeid?: number;
+  /** Node-level only: IPv4/IPv6 address Proxmox reports. */
+  ip?: string;
+}
+
 export interface ProxmoxNetworkInterface {
   iface: string;
   type: string;
@@ -422,6 +462,26 @@ export class ProxmoxClient {
       }
       req.end();
     });
+  }
+
+  // ── Cluster / version ───────────────────────────────────
+
+  /** PVE software version running on the API target. */
+  async getVersion(): Promise<ProxmoxVersion> {
+    return this.request<ProxmoxVersion>("GET", "/api2/json/version");
+  }
+
+  /**
+   * Cluster status (and member node enumeration). On a standalone
+   * single-node install, this returns only `type: "node"` entries
+   * with no `type: "cluster"` row. Callers fall back to a synthetic
+   * cluster name in that case.
+   */
+  async getClusterStatus(): Promise<ProxmoxClusterStatusEntry[]> {
+    return this.request<ProxmoxClusterStatusEntry[]>(
+      "GET",
+      "/api2/json/cluster/status",
+    );
   }
 
   // ── Nodes ───────────────────────────────────────────────

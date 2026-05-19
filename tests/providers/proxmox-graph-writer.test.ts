@@ -14,13 +14,16 @@ import { tmpdir } from "node:os";
 
 import { GraphStore } from "../../src/graph/index.js";
 import type {
+  ProxmoxClusterStatusEntry,
   ProxmoxNode,
   ProxmoxStorage,
   ProxmoxVM,
   ProxmoxVMConfig,
+  ProxmoxVersion,
 } from "../../src/providers/proxmox/client.js";
 import {
   ProxmoxGraphWriter,
+  clusterResourceId,
   containerResourceId,
   extractStorageRefsFromConfig,
   nodeResourceId,
@@ -109,6 +112,15 @@ interface FakeClientInputs {
   errorOnGetVMs?: Set<string>;
   errorOnGetStorage?: Set<string>;
   errorOnGetVMConfig?: Set<number>;
+  /** v0.7.3.2 — when set, getVersion returns this; omitting it
+   *  simulates an older client (the writer skips cluster discovery). */
+  version?: ProxmoxVersion;
+  /** v0.7.3.2 — when set, getClusterStatus returns this. */
+  clusterStatus?: ProxmoxClusterStatusEntry[];
+  /** Throw inside getVersion (simulates a transient cluster outage). */
+  errorOnGetVersion?: boolean;
+  /** Throw inside getClusterStatus (writer falls back to synthetic name). */
+  errorOnGetClusterStatus?: boolean;
 }
 
 class FakeProxmoxClient implements ProxmoxDiscoveryClient {
@@ -147,6 +159,41 @@ class FakeProxmoxClient implements ProxmoxDiscoveryClient {
   }
 }
 
+/**
+ * v0.7.3.2 — a client variant that exposes the cluster + version
+ * endpoints. Used by the cluster-discovery tests; the existing
+ * cluster-free tests still use FakeProxmoxClient so we keep proof that
+ * the writer is graceful when those methods are absent.
+ */
+class FakeProxmoxClientWithCluster
+  extends FakeProxmoxClient
+  implements ProxmoxDiscoveryClient
+{
+  constructor(private readonly clusterInputs: FakeClientInputs) {
+    super(clusterInputs);
+  }
+
+  async getVersion(): Promise<ProxmoxVersion> {
+    if (this.clusterInputs.errorOnGetVersion) {
+      throw new Error("simulated getVersion failure");
+    }
+    return (
+      this.clusterInputs.version ?? {
+        version: "8.0.4",
+        release: "8.0",
+        repoid: "test",
+      }
+    );
+  }
+
+  async getClusterStatus(): Promise<ProxmoxClusterStatusEntry[]> {
+    if (this.clusterInputs.errorOnGetClusterStatus) {
+      throw new Error("simulated getClusterStatus failure");
+    }
+    return this.clusterInputs.clusterStatus ?? [];
+  }
+}
+
 // ── Test bed ──────────────────────────────────────────────────
 
 describe("ProxmoxGraphWriter", () => {
@@ -166,7 +213,7 @@ describe("ProxmoxGraphWriter", () => {
   // ── Registration ────────────────────────────────────────────
 
   describe("register()", () => {
-    it("registers the four Proxmox resource types", () => {
+    it("registers all five Proxmox resource types", () => {
       const writer = new ProxmoxGraphWriter({
         store,
         client: new FakeProxmoxClient({}),
@@ -179,6 +226,12 @@ describe("ProxmoxGraphWriter", () => {
         store.getRegistration("proxmox", "proxmox_container"),
       ).toBeDefined();
       expect(store.getRegistration("proxmox", "proxmox_storage")).toBeDefined();
+      // v0.7.3.2 — cluster registration so the upgrade resolver has
+      // a target to read `pveVersion` off of.
+      expect(store.getRegistration("proxmox", "proxmox_cluster")).toBeDefined();
+      expect(
+        store.getRegistration("proxmox", "proxmox_cluster")!.interfaceLabels,
+      ).toEqual(["Cluster"]);
     });
 
     it("is idempotent — re-registering does not throw", () => {
@@ -450,6 +503,8 @@ describe("ProxmoxGraphWriter", () => {
         storage: 0,
         runsOnEdges: 0,
         mountsEdges: 0,
+        clusters: 0,
+        memberOfEdges: 0,
       });
       expect(store.listResources()).toHaveLength(0);
       expect(store.listRelationships()).toHaveLength(0);
@@ -562,6 +617,176 @@ describe("ProxmoxGraphWriter", () => {
         scsi2: "local-lvm:vm-200-disk-2,size=10G",
       });
       expect(refs).toEqual(["local-lvm"]);
+    });
+  });
+
+  // ── Cluster discovery (v0.7.3.2) ────────────────────────────
+
+  describe("cluster discovery (v0.7.3.2)", () => {
+    it("emits a proxmox_cluster + member_of edges when getVersion is available", async () => {
+      const writer = new ProxmoxGraphWriter({
+        store,
+        client: new FakeProxmoxClientWithCluster({
+          nodes: [node("pve-01"), node("pve-02")],
+          version: { version: "8.2.4", release: "8.2", repoid: "abc" },
+          clusterStatus: [
+            { type: "cluster", name: "homelab", nodes: 2, quorate: 1, version: 2 },
+            { type: "node", name: "pve-01", online: 1, local: 1, nodeid: 1 },
+            { type: "node", name: "pve-02", online: 1, local: 0, nodeid: 2 },
+          ],
+        }),
+      });
+      const stats = await writer.discover();
+
+      expect(stats.clusters).toBe(1);
+      expect(stats.memberOfEdges).toBe(2);
+
+      const cluster = store.getResource(clusterResourceId("homelab"));
+      expect(cluster).toBeDefined();
+      expect(cluster!.properties).toMatchObject({
+        clusterName: "homelab",
+        pveVersion: "8.2.4",
+        pveRelease: "8.2",
+        nodeCount: 2,
+        quorate: true,
+      });
+      expect(cluster!.observedState).toBe("healthy");
+
+      // Each node has a member_of edge → cluster
+      const edges = store.edgesTo(clusterResourceId("homelab"), "member_of");
+      const fromIds = edges.map((e) => e.fromId).sort();
+      expect(fromIds).toEqual([
+        nodeResourceId("pve-01"),
+        nodeResourceId("pve-02"),
+      ]);
+    });
+
+    it("synthesizes a cluster name from the first node when no cluster entry", async () => {
+      const writer = new ProxmoxGraphWriter({
+        store,
+        client: new FakeProxmoxClientWithCluster({
+          nodes: [node("pve-solo")],
+          version: { version: "8.0.4", release: "8.0", repoid: "test" },
+          // Standalone single-node install — cluster/status returns
+          // only the node entry, no `type: "cluster"` row.
+          clusterStatus: [
+            { type: "node", name: "pve-solo", online: 1, local: 1, nodeid: 1 },
+          ],
+        }),
+      });
+      const stats = await writer.discover();
+
+      expect(stats.clusters).toBe(1);
+      const cluster = store.getResource(
+        clusterResourceId("proxmox-pve-solo"),
+      );
+      expect(cluster).toBeDefined();
+      expect(cluster!.properties).toMatchObject({
+        clusterName: "proxmox-pve-solo",
+        pveVersion: "8.0.4",
+        nodeCount: 1,
+        quorate: false,
+      });
+      expect(cluster!.observedState).toBe("healthy");
+    });
+
+    it("falls back to synthetic name when getClusterStatus throws", async () => {
+      const writer = new ProxmoxGraphWriter({
+        store,
+        client: new FakeProxmoxClientWithCluster({
+          nodes: [node("pve-alpha")],
+          version: { version: "8.1.0", release: "8.1", repoid: "x" },
+          errorOnGetClusterStatus: true,
+        }),
+      });
+      const stats = await writer.discover();
+      expect(stats.clusters).toBe(1);
+      const cluster = store.getResource(
+        clusterResourceId("proxmox-pve-alpha"),
+      );
+      expect(cluster).toBeDefined();
+      // No cluster/status entries → unknown health
+      expect(cluster!.observedState).toBe("unknown");
+    });
+
+    it("skips cluster discovery silently when getVersion throws", async () => {
+      const writer = new ProxmoxGraphWriter({
+        store,
+        client: new FakeProxmoxClientWithCluster({
+          nodes: [node("pve-01")],
+          errorOnGetVersion: true,
+        }),
+      });
+      const stats = await writer.discover();
+      expect(stats.clusters).toBe(0);
+      expect(stats.memberOfEdges).toBe(0);
+      // The node itself still got upserted.
+      expect(stats.nodes).toBe(1);
+      expect(store.getResource(nodeResourceId("pve-01"))).toBeDefined();
+    });
+
+    it("skips cluster discovery entirely when the client doesn't expose getVersion", async () => {
+      // FakeProxmoxClient (no cluster mixin) intentionally omits
+      // getVersion — simulates an older adapter / test that hasn't
+      // been migrated yet. The writer must not crash.
+      const writer = new ProxmoxGraphWriter({
+        store,
+        client: new FakeProxmoxClient({ nodes: [node("pve-01")] }),
+      });
+      const stats = await writer.discover();
+      expect(stats.clusters).toBe(0);
+      expect(stats.memberOfEdges).toBe(0);
+      expect(stats.nodes).toBe(1);
+    });
+
+    it("marks the cluster degraded when one of two cluster nodes is offline", async () => {
+      const writer = new ProxmoxGraphWriter({
+        store,
+        client: new FakeProxmoxClientWithCluster({
+          nodes: [node("pve-01"), node("pve-02", { status: "offline" })],
+          version: { version: "8.2.4", release: "8.2", repoid: "abc" },
+          clusterStatus: [
+            { type: "cluster", name: "homelab", nodes: 2, quorate: 1, version: 2 },
+            { type: "node", name: "pve-01", online: 1, local: 1, nodeid: 1 },
+            { type: "node", name: "pve-02", online: 0, local: 0, nodeid: 2 },
+          ],
+        }),
+      });
+      await writer.discover();
+      const cluster = store.getResource(clusterResourceId("homelab"));
+      expect(cluster!.observedState).toBe("degraded");
+    });
+
+    it("marks the cluster critical when quorum is lost", async () => {
+      const writer = new ProxmoxGraphWriter({
+        store,
+        client: new FakeProxmoxClientWithCluster({
+          nodes: [node("pve-01"), node("pve-02"), node("pve-03")],
+          version: { version: "8.2.4", release: "8.2", repoid: "abc" },
+          clusterStatus: [
+            { type: "cluster", name: "homelab", nodes: 3, quorate: 0, version: 2 },
+            { type: "node", name: "pve-01", online: 1, local: 1, nodeid: 1 },
+            { type: "node", name: "pve-02", online: 0, local: 0, nodeid: 2 },
+            { type: "node", name: "pve-03", online: 0, local: 0, nodeid: 3 },
+          ],
+        }),
+      });
+      await writer.discover();
+      const cluster = store.getResource(clusterResourceId("homelab"));
+      expect(cluster!.observedState).toBe("critical");
+    });
+
+    it("does not emit a cluster when there are zero nodes", async () => {
+      const writer = new ProxmoxGraphWriter({
+        store,
+        client: new FakeProxmoxClientWithCluster({
+          nodes: [],
+          version: { version: "8.0.4", release: "8.0", repoid: "x" },
+        }),
+      });
+      const stats = await writer.discover();
+      expect(stats.clusters).toBe(0);
+      expect(stats.memberOfEdges).toBe(0);
     });
   });
 });

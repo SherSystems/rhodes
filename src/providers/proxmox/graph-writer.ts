@@ -26,15 +26,18 @@
 
 import { GraphStore, z } from "../../graph/index.js";
 import type {
+  ClusterState,
   ComputeNodeState,
   ComputeWorkloadState,
   StorageState,
 } from "../../graph/index.js";
 import type {
+  ProxmoxClusterStatusEntry,
   ProxmoxNode,
   ProxmoxStorage,
   ProxmoxVM,
   ProxmoxVMConfig,
+  ProxmoxVersion,
 } from "./client.js";
 
 // ── Minimal client surface this writer depends on ─────────────
@@ -49,6 +52,22 @@ export interface ProxmoxDiscoveryClient {
   getVMs(node?: string): Promise<ProxmoxVM[]>;
   getStorage(node?: string): Promise<ProxmoxStorage[]>;
   getVMConfig(node: string, vmid: number): Promise<ProxmoxVMConfig>;
+  /**
+   * v0.7.3.2 — Optional. Used by `discover()` to emit a
+   * `proxmox_cluster` resource with the PVE software version on its
+   * properties so the upgrade resolver has a `pveVersion` to read.
+   * When the method is absent (older fakes), cluster discovery is
+   * skipped silently — every other resource still flows.
+   */
+  getVersion?(): Promise<ProxmoxVersion>;
+  /**
+   * v0.7.3.2 — Optional. Returns the cluster/status array so we can
+   * use Proxmox's real cluster name when the installation is part of
+   * a quorate cluster. On standalone single-node installs the
+   * endpoint returns only node entries; the writer falls back to a
+   * synthetic name in that case.
+   */
+  getClusterStatus?(): Promise<ProxmoxClusterStatusEntry[]>;
 }
 
 // ── Resource-type schemas (substrate-specific properties) ─────
@@ -95,6 +114,22 @@ const proxmoxContainerPropertiesSchema = z.object({
   tags: z.string().optional(),
 });
 
+const proxmoxClusterPropertiesSchema = z.object({
+  /** Proxmox cluster name. Real cluster name when the install is
+   *  quorate, synthetic ("proxmox-<host>") when standalone. */
+  clusterName: z.string(),
+  /** PVE software version (e.g. "8.0.4"). The resolver reads this
+   *  from `pveVersion` as the sourceVersion of an UpgradePlan. */
+  pveVersion: z.string(),
+  /** Major.minor release line (e.g. "8.0"). */
+  pveRelease: z.string(),
+  /** Number of member nodes Proxmox reports (or 1 for standalone). */
+  nodeCount: z.number(),
+  /** True only when Proxmox reports the cluster as quorate (real
+   *  multi-node cluster). False for standalone single-node installs. */
+  quorate: z.boolean(),
+});
+
 const proxmoxStoragePropertiesSchema = z.object({
   storageName: z.string(),
   node: z.string(),
@@ -135,6 +170,13 @@ const PROXMOX_STORAGE_STATES: readonly StorageState[] = [
   "unknown",
 ];
 
+const PROXMOX_CLUSTER_STATES: readonly ClusterState[] = [
+  "healthy",
+  "degraded",
+  "critical",
+  "unknown",
+];
+
 // ── Public API ────────────────────────────────────────────────
 
 export interface ProxmoxGraphWriterOptions {
@@ -149,6 +191,10 @@ export interface ProxmoxDiscoveryStats {
   storage: number;
   runsOnEdges: number;
   mountsEdges: number;
+  /** v0.7.3.2 — 1 when a proxmox_cluster resource was emitted, 0 otherwise. */
+  clusters: number;
+  /** v0.7.3.2 — node → cluster member_of edges emitted. */
+  memberOfEdges: number;
 }
 
 export class ProxmoxGraphWriter {
@@ -196,6 +242,13 @@ export class ProxmoxGraphWriter {
       allowedStates: PROXMOX_STORAGE_STATES,
       propertiesSchema: proxmoxStoragePropertiesSchema,
     });
+    this.store.registerResourceType({
+      provider: "proxmox",
+      type: "proxmox_cluster",
+      interfaceLabels: ["Cluster"],
+      allowedStates: PROXMOX_CLUSTER_STATES,
+      propertiesSchema: proxmoxClusterPropertiesSchema,
+    });
     this.registered = true;
   }
 
@@ -220,6 +273,8 @@ export class ProxmoxGraphWriter {
       storage: 0,
       runsOnEdges: 0,
       mountsEdges: 0,
+      clusters: 0,
+      memberOfEdges: 0,
     };
 
     const nodes = await this.client.getNodes();
@@ -230,6 +285,45 @@ export class ProxmoxGraphWriter {
       this.upsertNode(node);
       knownNodeNames.add(node.node);
       stats.nodes += 1;
+    }
+
+    // 1b. v0.7.3.2 — synthesize a proxmox_cluster resource so the
+    // upgrade resolver has a `member_of` target with a `pveVersion`
+    // property. Only emitted when `getVersion` is available on the
+    // client (older fakes don't implement it; we skip silently to
+    // keep them green). The cluster name comes from cluster/status
+    // when the install is part of a quorate cluster; otherwise we
+    // synthesize "proxmox-<firstNodeName>" so multi-install setups
+    // stay distinguishable.
+    if (typeof this.client.getVersion === "function" && nodes.length > 0) {
+      try {
+        const version = await this.client.getVersion();
+        const clusterStatus =
+          typeof this.client.getClusterStatus === "function"
+            ? await this.client.getClusterStatus().catch(() => [] as ProxmoxClusterStatusEntry[])
+            : [];
+        const clusterMeta = deriveClusterMeta(
+          clusterStatus,
+          nodes[0]?.node ?? "default",
+          nodes.length,
+        );
+        this.upsertCluster(clusterMeta, version, clusterStatus);
+        stats.clusters = 1;
+        // member_of edges: each node → the cluster.
+        for (const node of nodes) {
+          this.store.upsertRelationship({
+            fromId: nodeResourceId(node.node),
+            toId: clusterResourceId(clusterMeta.name),
+            type: "member_of",
+            origin: "direct",
+          });
+          stats.memberOfEdges += 1;
+        }
+      } catch {
+        // Version endpoint is fundamental — if it fails we just skip
+        // cluster discovery this cycle. Resources/edges already
+        // upserted above stay intact.
+      }
     }
 
     // 2. VMs + containers per node, and the runs_on edges.
@@ -406,6 +500,27 @@ export class ProxmoxGraphWriter {
     });
   }
 
+  private upsertCluster(
+    meta: { name: string; quorate: boolean; nodeCount: number },
+    version: ProxmoxVersion,
+    status: ProxmoxClusterStatusEntry[],
+  ): void {
+    this.store.upsertResource({
+      id: clusterResourceId(meta.name),
+      provider: "proxmox",
+      type: "proxmox_cluster",
+      name: meta.name,
+      observedState: mapClusterState(status, meta.quorate, meta.nodeCount),
+      properties: {
+        clusterName: meta.name,
+        pveVersion: version.version,
+        pveRelease: version.release,
+        nodeCount: meta.nodeCount,
+        quorate: meta.quorate,
+      },
+    });
+  }
+
   private upsertStorage(pool: ProxmoxStorage, nodeName: string): void {
     this.store.upsertResource({
       id: storageResourceId(nodeName, pool.storage),
@@ -445,6 +560,65 @@ export function vmResourceId(vmid: number): string {
 
 export function containerResourceId(vmid: number): string {
   return `proxmox:proxmox_container:${vmid}`;
+}
+
+export function clusterResourceId(clusterName: string): string {
+  return `proxmox:proxmox_cluster:${clusterName}`;
+}
+
+/**
+ * Decide the cluster name + quorate flag the writer will use.
+ * Prefers the real Proxmox cluster name when the install is part of
+ * a quorate multi-node cluster; otherwise synthesizes a deterministic
+ * name from the first node so two standalone installs don't collide
+ * in the same graph.
+ */
+function deriveClusterMeta(
+  status: ProxmoxClusterStatusEntry[],
+  fallbackNode: string,
+  nodeCount: number,
+): { name: string; quorate: boolean; nodeCount: number } {
+  const clusterEntry = status.find((s) => s.type === "cluster");
+  if (clusterEntry?.name) {
+    return {
+      name: clusterEntry.name,
+      quorate: clusterEntry.quorate === 1,
+      nodeCount: clusterEntry.nodes ?? nodeCount,
+    };
+  }
+  return {
+    name: `proxmox-${fallbackNode}`,
+    quorate: false,
+    nodeCount,
+  };
+}
+
+/**
+ * Map the cluster-level health signal into our `ClusterState` enum.
+ * - quorate (real cluster) + all nodes online → healthy
+ * - quorate but some nodes offline → degraded
+ * - not quorate (or never quorate / standalone) with >1 expected node → critical
+ * - standalone single-node install with the node online → healthy
+ * - everything else → unknown
+ */
+function mapClusterState(
+  status: ProxmoxClusterStatusEntry[],
+  quorate: boolean,
+  nodeCount: number,
+): ClusterState {
+  const nodeEntries = status.filter((s) => s.type === "node");
+  const onlineNodes = nodeEntries.filter((n) => n.online === 1).length;
+
+  // Standalone install (no cluster entry, single node): healthy if the
+  // one node we know about is reachable. cluster/status returns the
+  // local node with online=1 in that case.
+  if (nodeEntries.length === 0) {
+    return "unknown";
+  }
+  if (!quorate && nodeCount > 1) return "critical";
+  if (onlineNodes === nodeEntries.length) return "healthy";
+  if (onlineNodes > 0) return "degraded";
+  return "critical";
 }
 
 export function storageResourceId(nodeName: string, storageName: string): string {
